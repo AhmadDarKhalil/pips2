@@ -11,6 +11,7 @@ from fire import Fire
 import sys
 import cv2
 from pathlib import Path
+from PIL import Image
 
 def read_mp4(fn):
     vidcap = cv2.VideoCapture(fn)
@@ -49,13 +50,35 @@ def run_model(model, rgbs, S_max=128, N=64, iters=16, sw=None):
     print('inference time: %.2f seconds (%.1f fps)' % (iter_time, S/iter_time))
 
     if sw is not None and sw.save_this:
-        rgbs_prep = utils.improc.preprocess_color(rgbs)
-        sw.summ_traj2ds_on_rgbs('outputs/trajs_on_rgbs', trajs_e[0:1], utils.improc.preprocess_color(rgbs[0:1]), cmap='hot', linewidth=1, show_dots=False)
+        #rgbs_prep = utils.improc.preprocess_color(rgbs)
+        #sw.summ_traj2ds_on_rgbs('outputs/trajs_on_rgbs', trajs_e[0:1], utils.improc.preprocess_color(rgbs[0:1]), cmap='hot', linewidth=1, show_dots=False)
+        
+        linewidth = 2    
+        # visualize the input
+        o1 = sw.summ_rgbs('inputs/rgbs', utils.improc.preprocess_color(rgbs[0:1]).unbind(1))
+        # visualize the trajs overlaid on the rgbs
+        o2 = sw.summ_traj2ds_on_rgbs('outputs/trajs_on_rgbs', trajs_e[0:1], utils.improc.preprocess_color(rgbs[0:1]), cmap='spring', linewidth=linewidth)
+        # visualize the trajs alone
+        o3 = sw.summ_traj2ds_on_rgbs('outputs/trajs_on_black', trajs_e[0:1], torch.ones_like(rgbs[0:1])*-0.5, cmap='spring', linewidth=linewidth)
+        # concat these for a synced wide vis
+        wide_cat = torch.cat([o1, o2, o3], dim=-1)
+        sw.summ_rgbs('outputs/wide_cat', wide_cat.unbind(1))
+
+        # write to disk, in case that's more convenient
+        wide_list = list(wide_cat.unbind(1))
+        wide_list = [wide[0].permute(1,2,0).cpu().numpy() for wide in wide_list]
+        wide_list = [Image.fromarray(wide) for wide in wide_list]
+        out_fn = './out_%d.gif' % sw.global_step
+        wide_list[0].save(out_fn, save_all=True, append_images=wide_list[1:])
+        print('saved %s' % out_fn)
+
+    
+    
     return trajs_e
 
 
 def main(
-        filename='./stock_videos/camel.mp4',
+        filename='./stock_videos/demo2.mp4',
         S=48, # seqlen
         N=1024, # number of points per clip
         stride=8, # spatial stride of the model
@@ -118,7 +141,7 @@ def main(
             writer=writer_t,
             global_step=global_step,
             log_freq=log_freq,
-            fps=16,
+            fps=6,
             scalar_freq=int(log_freq/2),
             just_gif=True)
 
