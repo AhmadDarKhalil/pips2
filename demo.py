@@ -117,26 +117,29 @@ def run_model_forward_backward(model, rgbs, S_max=128, N=64, iters=16, sw=None):
     #return trajs_e_forward, trajs_e_backward
 
 
-def annotate_video_with_dots(rgbs, frame_points, sw, file_suffix="ALL"):
+def annotate_video_with_dots(rgbs, window_points, sw, file_suffix="ALL"):
     linewidth = 2
-    print(dot_size)
-    # visualize the input
-    o1 = sw.summ_rgbs('inputs/rgbs', utils.improc.preprocess_color(rgbs[0:1]).unbind(1))
-    # visualize the trajs overlaid on the rgbs
-    o2 = sw.summ_traj2ds_on_rgbs('outputs/trajs_on_rgbs', frame_points[0:1], utils.improc.preprocess_color(rgbs[0:1]), cmap='spring', linewidth=linewidth, dot_size=dot_size)
-    # visualize the trajs alone
-    o3 = sw.summ_traj2ds_on_rgbs('outputs/trajs_on_black', frame_points[0:1], torch.ones_like(rgbs[0:1])*-0.5, cmap='spring', linewidth=linewidth, dot_size=dot_size)
-    # concat these for a synced wide vis
-    wide_cat = torch.cat([o1, o2, o3], dim=-1)
-    sw.summ_rgbs('outputs/wide_cat', wide_cat.unbind(1))
-
-    # write to disk, in case that's more convenient
-    wide_list = list(wide_cat.unbind(1))
-    wide_list = [wide[0].permute(1,2,0).cpu().numpy() for wide in wide_list]
+    print("Number of windows = {len(window_points)}")
     out_fn = f"./example_outputs/CC_{'GOOD' if keep_good_points else 'BAD'}_{filename_for_demo.split('.mp4')[0]}_out_{file_suffix}.mp4"
     video_writer = cv2.VideoWriter(out_fn, cv2.VideoWriter_fourcc(*'MP4V'), 12.0, (2688,512))
-    for wide in wide_list:
-        video_writer.write(cv2.cvtColor(wide, cv2.COLOR_RGB2BGR))
+    for window_idx, frame_points in  window_points:
+        print("Annotating window: {window_idx+1}")
+        # visualize the input
+        o1 = sw.summ_rgbs('inputs/rgbs', utils.improc.preprocess_color(rgbs[0:1]).unbind(1))
+        # visualize the trajs overlaid on the rgbs
+        o2 = sw.summ_traj2ds_on_rgbs('outputs/trajs_on_rgbs', frame_points[0:1], utils.improc.preprocess_color(rgbs[0:1]), cmap='spring', linewidth=linewidth, dot_size=dot_size)
+        # visualize the trajs alone
+        o3 = sw.summ_traj2ds_on_rgbs('outputs/trajs_on_black', frame_points[0:1], torch.ones_like(rgbs[0:1])*-0.5, cmap='spring', linewidth=linewidth, dot_size=dot_size)
+        # concat these for a synced wide vis
+        wide_cat = torch.cat([o1, o2, o3], dim=-1)
+        sw.summ_rgbs('outputs/wide_cat', wide_cat.unbind(1))
+
+        # write to disk, in case that's more convenient
+        wide_list = list(wide_cat.unbind(1))
+        wide_list = [wide[0].permute(1,2,0).cpu().numpy() for wide in wide_list]
+        for wide in wide_list:
+            video_writer.write(cv2.cvtColor(wide, cv2.COLOR_RGB2BGR))
+
     video_writer.release()
     print(f"Saved {out_fn}")
 
@@ -252,7 +255,7 @@ def main(
         idx = idx[:max_iters]
     
     pass_on_trajs = None
-    all_frame_points = torch.tensor([])
+    window_points = []
     for si in idx:
         global_step += 1
         
@@ -274,7 +277,7 @@ def main(
             trajs_e = run_model_forward_backward(model, rgb_seq, S_max=S, N=N, iters=iters, sw=sw_t, pass_on_trajs=pass_on_trajs)
             print(trajs_e.shape)
         pass_on_trajs = trajs_e[0, -1, :, :].repeat(1, S, 1, 1)
-        all_frame_points = torch.cat([all_frame_points, trajs_e.detach().cpu()], dim=1)
+        window_points.append(trajs_e.detach().cpu())
 
         iter_time = time.time()-iter_start_time
         
@@ -283,7 +286,7 @@ def main(
     # Use all points on whole video
     rgb_seq_full = torch.from_numpy(rgbs[0:si+S]).permute(0, 3, 1, 2).to(torch.float32)
     rgb_seq_full = F.interpolate(rgb_seq_full, image_size, mode='bilinear').unsqueeze(0)
-    annotate_whole_video(rgb_seq_full, all_frame_points, sw_t, file_suffix="ALL")
+    annotate_whole_video(rgb_seq_full, window_points, sw_t, file_suffix="ALL")
     print("### Done ###")
         
             
@@ -293,7 +296,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--mp4_filename", action="store", dest="mp4_filename", default="P11_102_from_1-52_to_1-55.mp4")
     parser.add_argument("--keep_good_points", action="store_true", dest="keep_good_points")
-    parser.set_defaults(keep_good_points=True)
+    parser.set_defaults(keep_good_points=False)
     args = parser.parse_args()
     filename_for_demo = args.mp4_filename
     keep_good_points = args.keep_good_points
