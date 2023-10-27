@@ -12,6 +12,7 @@ import sys
 import cv2
 from pathlib import Path
 from PIL import Image
+import argparse
 
 def read_mp4(fn):
     vidcap = cv2.VideoCapture(fn)
