@@ -125,14 +125,14 @@ def annotate_video_with_dots(rgbs, window_points, sw, file_suffix="ALL"):
     print("Number of windows = {len(window_points)}")
     out_fn = f"./example_outputs/CC_{'GOOD' if keep_good_points else 'BAD'}_{filename_for_demo.split('.mp4')[0]}_out_{file_suffix}.mp4"
     video_writer = cv2.VideoWriter(out_fn, cv2.VideoWriter_fourcc(*'MP4V'), 12.0, (2688,512))
-    for window_idx, frame_points in  window_points:
-        print("Annotating window: {window_idx+1}")
+    for window_idx, frame_points in  enumerate(window_points):
+        print(f"Annotating window: {window_idx+1}")
         # visualize the input
-        o1 = sw.summ_rgbs('inputs/rgbs', utils.improc.preprocess_color(rgbs[0:1]).unbind(1))
+        o1 = sw.summ_rgbs('inputs/rgbs', utils.improc.preprocess_color(rgbs[window_idx][0:1]).unbind(1))
         # visualize the trajs overlaid on the rgbs
-        o2 = sw.summ_traj2ds_on_rgbs('outputs/trajs_on_rgbs', frame_points[0:1], utils.improc.preprocess_color(rgbs[0:1]), cmap='spring', linewidth=linewidth, dot_size=dot_size)
+        o2 = sw.summ_traj2ds_on_rgbs('outputs/trajs_on_rgbs', frame_points[0:1], utils.improc.preprocess_color(rgbs[window_idx][0:1]), cmap='spring', linewidth=linewidth)
         # visualize the trajs alone
-        o3 = sw.summ_traj2ds_on_rgbs('outputs/trajs_on_black', frame_points[0:1], torch.ones_like(rgbs[0:1])*-0.5, cmap='spring', linewidth=linewidth, dot_size=dot_size)
+        o3 = sw.summ_traj2ds_on_rgbs('outputs/trajs_on_black', frame_points[0:1], torch.ones_like(rgbs[window_idx][0:1])*-0.5, cmap='spring', linewidth=linewidth)
         # concat these for a synced wide vis
         wide_cat = torch.cat([o1, o2, o3], dim=-1)
         sw.summ_rgbs('outputs/wide_cat', wide_cat.unbind(1))
@@ -212,7 +212,7 @@ def main(
         shuffle=False, # dataset shuffling
         log_freq=1, # how often to make image summaries
         log_dir='./logs_demo',
-        init_dir='./reference_model',
+        init_dir='/home/deepthought/Ahmad/pips2/reference_model',
         device_ids=[0],
 ):
 
@@ -259,6 +259,7 @@ def main(
     
     pass_on_trajs = None
     window_points = []
+    rgb_seq_full = []
     for si in idx:
         global_step += 1
         
@@ -275,6 +276,7 @@ def main(
         rgb_seq = rgbs[si:si+S]
         rgb_seq = torch.from_numpy(rgb_seq).permute(0,3,1,2).to(torch.float32) # S,3,H,W
         rgb_seq = F.interpolate(rgb_seq, image_size, mode='bilinear').unsqueeze(0) # 1,S,3,H,W
+        rgb_seq_full.append(rgb_seq)
         
         with torch.no_grad():
             trajs_e = run_model_forward_backward(model, rgb_seq, S_max=S, N=N, iters=iters, sw=sw_t, pass_on_trajs=pass_on_trajs)
@@ -290,8 +292,8 @@ def main(
         window_points.append(trajs_e.detach().cpu())
 
     # Use all points on whole video
-    rgb_seq_full = torch.from_numpy(rgbs[0:si+S]).permute(0, 3, 1, 2).to(torch.float32)
-    rgb_seq_full = F.interpolate(rgb_seq_full, image_size, mode='bilinear').unsqueeze(0)
+    #rgb_seq_full = torch.from_numpy(rgbs[0:si+S]).permute(0, 3, 1, 2).to(torch.float32)
+    #rgb_seq_full = F.interpolate(rgb_seq_full, image_size, mode='bilinear').unsqueeze(0)
     annotate_video_with_dots(rgb_seq_full, window_points, sw_t, file_suffix="ALL")
     print("### Done ###")
         
