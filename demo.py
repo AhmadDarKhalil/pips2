@@ -75,7 +75,12 @@ def run_model_forward_backward(model, rgbs, S_max=128, N=64, iters=16, sw=None):
     m = dist.mean(0) #N, average distence per point
     #m = dist.max(0)[0].shape
     print('average distence: ', dist.mean())
-    keep_point = m < 2 #dist.mean() # keep the point if it's less the average
+    print(f"Keep Good Points = {keep_good_points}")
+    if keep_good_points:
+        keep_point = m < 2
+    else:
+        keep_point = m > dist.mean()
+    #keep_point = m < 2 #dist.mean() # keep the point if it's less the average
     
     
     trajs_e = trajs_e_forward[:,:,keep_point]
@@ -128,7 +133,7 @@ def annotate_video_with_dots(rgbs, frame_points, sw, file_suffix="ALL"):
     # write to disk, in case that's more convenient
     wide_list = list(wide_cat.unbind(1))
     wide_list = [wide[0].permute(1,2,0).cpu().numpy() for wide in wide_list]
-    out_fn = f"./example_outputs/CC_GOOD_POINTS_{filename_for_demo.split('.mp4')[0]}_out_{file_suffix}.mp4"
+    out_fn = f"./example_outputs/CC_{'GOOD' if keep_good_points else 'BAD'}_{filename_for_demo.split('.mp4')[0]}_out_{file_suffix}.mp4"
     video_writer = cv2.VideoWriter(out_fn, cv2.VideoWriter_fourcc(*'MP4V'), 12.0, (2688,512))
     for wide in wide_list:
         video_writer.write(cv2.cvtColor(wide, cv2.COLOR_RGB2BGR))
@@ -287,6 +292,9 @@ def main(
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--mp4_filename", action="store", dest="mp4_filename", default="P11_102_from_1-52_to_1-55.mp4")
+    parser.add_argument("--keep_good_points", action="store_true", dest="keep_good_points")
+    parser.set_defaults(keep_good_points=True)
     args = parser.parse_args()
     filename_for_demo = args.mp4_filename
+    keep_good_points = args.keep_good_points
     Fire(main)
