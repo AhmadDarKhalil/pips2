@@ -136,9 +136,9 @@ def annotate_video_with_dots(rgbs, window_points, sw, file_suffix="ALL"):
 
         # write to disk, in case that's more convenient
         wide_list = list(wide_cat.unbind(1))
-        wide_list = [wide[0].permute(1,2,0).cpu().numpy() for wide in wide_list]
+        #wide_list = [wide[0].permute(1,2,0).cpu().numpy() for wide in wide_list]
         for wide in wide_list:
-            video_writer.write(cv2.cvtColor(wide, cv2.COLOR_RGB2BGR))
+            video_writer.write(cv2.cvtColor(wide[0].permute(1,2,0).cpu().numpy(), cv2.COLOR_RGB2BGR))
 
     video_writer.release()
     print(f"Saved {out_fn}")
@@ -276,13 +276,16 @@ def main(
         with torch.no_grad():
             trajs_e = run_model_forward_backward(model, rgb_seq, S_max=S, N=N, iters=iters, sw=sw_t, pass_on_trajs=pass_on_trajs)
             print(trajs_e.shape)
+        iter_time = time.time()-iter_start_time
+        print('%s; step %06d/%d; itime %.2f' % (
+            model_name, global_step, max_iters, iter_time))
+
+        if trajs_e.size(2) == 0:
+            print("Exiting early because no points left...")
+            break
         pass_on_trajs = trajs_e[0, -1, :, :].repeat(1, S, 1, 1)
         window_points.append(trajs_e.detach().cpu())
 
-        iter_time = time.time()-iter_start_time
-        
-        print('%s; step %06d/%d; itime %.2f' % (
-            model_name, global_step, max_iters, iter_time))
     # Use all points on whole video
     rgb_seq_full = torch.from_numpy(rgbs[0:si+S]).permute(0, 3, 1, 2).to(torch.float32)
     rgb_seq_full = F.interpolate(rgb_seq_full, image_size, mode='bilinear').unsqueeze(0)
@@ -300,4 +303,5 @@ if __name__ == '__main__':
     args = parser.parse_args()
     filename_for_demo = args.mp4_filename
     keep_good_points = args.keep_good_points
+    print(f"### Keeping {'GOOD' if keep_good_points else 'BAD'} Points ###")
     Fire(main)
