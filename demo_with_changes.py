@@ -76,8 +76,8 @@ def annotate_whole_video(rgbs, frame_points, sw, file_suffix="ALL"):
     # write to disk, in case that's more convenient
     wide_list = list(wide_cat.unbind(1))
     wide_list = [wide[0].permute(1,2,0).cpu().numpy() for wide in wide_list]
-    out_fn = f"./example_outputs/NO_REINIT_{filename_for_demo.split('.MP4')[0]}_out_{file_suffix}.mp4"
-    video_writer = cv2.VideoWriter("TEST_MP4_SAVE_CONVERT_RGB.mp4", cv2.VideoWriter_fourcc(*'MP4V'), 24.0, (2688,512))
+    out_fn = f"./example_outputs/NO_REINIT_{filename_for_demo.split('.mp4')[0]}_out_{file_suffix}.mp4"
+    video_writer = cv2.VideoWriter(out_fn, cv2.VideoWriter_fourcc(*'MP4V'), 24.0, (2688,512))
     for wide in wide_list:
         video_writer.write(cv2.cvtColor(wide, cv2.COLOR_RGB2BGR))
     video_writer.release()
