@@ -82,34 +82,58 @@ def run_model_forward_backward(model, rgbs, S_max=128, N=64, iters=16, sw=None):
 
     print('inference time: %.2f seconds (%.1f fps)' % (iter_time, S/iter_time))
     
-    if sw is not None and sw.save_this:
-        #rgbs_prep = utils.improc.preprocess_color(rgbs)
-        #sw.summ_traj2ds_on_rgbs('outputs/trajs_on_rgbs', trajs_e[0:1], utils.improc.preprocess_color(rgbs[0:1]), cmap='hot', linewidth=1, show_dots=False)
-        
-        linewidth = 2    
-        # visualize the input
-        o1 = sw.summ_rgbs('inputs/rgbs', utils.improc.preprocess_color(rgbs[0:1]).unbind(1))
-        # visualize the trajs overlaid on the rgbs
-        o2 = sw.summ_traj2ds_on_rgbs('outputs/trajs_on_rgbs', trajs_e[0:1], utils.improc.preprocess_color(rgbs[0:1]), cmap='spring', linewidth=linewidth)
-        # visualize the trajs alone
-        o3 = sw.summ_traj2ds_on_rgbs('outputs/trajs_on_black', trajs_e[0:1], torch.ones_like(rgbs[0:1])*-0.5, cmap='spring', linewidth=linewidth)
-        # concat these for a synced wide vis
-        wide_cat = torch.cat([o1, o2, o3], dim=-1)
-        sw.summ_rgbs('outputs/wide_cat', wide_cat.unbind(1))
-
-        # write to disk, in case that's more convenient
-        wide_list = list(wide_cat.unbind(1))
-        wide_list = [wide[0].permute(1,2,0).cpu().numpy() for wide in wide_list]
-        wide_list = [Image.fromarray(wide) for wide in wide_list]
-        out_fn = './out_%d.gif' % sw.global_step
-        wide_list[0].save(out_fn, save_all=True, append_images=wide_list[1:])
-        print('saved %s' % out_fn)
+    #if sw is not None and sw.save_this:
+    #    #rgbs_prep = utils.improc.preprocess_color(rgbs)
+    #    #sw.summ_traj2ds_on_rgbs('outputs/trajs_on_rgbs', trajs_e[0:1], utils.improc.preprocess_color(rgbs[0:1]), cmap='hot', linewidth=1, show_dots=False)
+    #    
+    #    linewidth = 2    
+    #    # visualize the input
+    #    o1 = sw.summ_rgbs('inputs/rgbs', utils.improc.preprocess_color(rgbs[0:1]).unbind(1))
+    #    # visualize the trajs overlaid on the rgbs
+    #    o2 = sw.summ_traj2ds_on_rgbs('outputs/trajs_on_rgbs', trajs_e[0:1], utils.improc.preprocess_color(rgbs[0:1]), cmap='spring', linewidth=linewidth)
+    #    # visualize the trajs alone
+    #    o3 = sw.summ_traj2ds_on_rgbs('outputs/trajs_on_black', trajs_e[0:1], torch.ones_like(rgbs[0:1])*-0.5, cmap='spring', linewidth=linewidth)
+    #    # concat these for a synced wide vis
+    #    wide_cat = torch.cat([o1, o2, o3], dim=-1)
+    #    sw.summ_rgbs('outputs/wide_cat', wide_cat.unbind(1))
+#
+#        # write to disk, in case that's more convenient
+#        wide_list = list(wide_cat.unbind(1))
+#        wide_list = [wide[0].permute(1,2,0).cpu().numpy() for wide in wide_list]
+#        wide_list = [Image.fromarray(wide) for wide in wide_list]
+#        out_fn = './out_%d.gif' % sw.global_step
+#        wide_list[0].save(out_fn, save_all=True, append_images=wide_list[1:])
+#        print('saved %s' % out_fn)
 
     
     
     return trajs_e
 
     #return trajs_e_forward, trajs_e_backward
+
+
+def annotate_video_with_dots(rgbs, frame_points, sw, file_suffix="ALL"):
+    linewidth = 2
+    print(dot_size)
+    # visualize the input
+    o1 = sw.summ_rgbs('inputs/rgbs', utils.improc.preprocess_color(rgbs[0:1]).unbind(1))
+    # visualize the trajs overlaid on the rgbs
+    o2 = sw.summ_traj2ds_on_rgbs('outputs/trajs_on_rgbs', frame_points[0:1], utils.improc.preprocess_color(rgbs[0:1]), cmap='spring', linewidth=linewidth, dot_size=dot_size)
+    # visualize the trajs alone
+    o3 = sw.summ_traj2ds_on_rgbs('outputs/trajs_on_black', frame_points[0:1], torch.ones_like(rgbs[0:1])*-0.5, cmap='spring', linewidth=linewidth, dot_size=dot_size)
+    # concat these for a synced wide vis
+    wide_cat = torch.cat([o1, o2, o3], dim=-1)
+    sw.summ_rgbs('outputs/wide_cat', wide_cat.unbind(1))
+
+    # write to disk, in case that's more convenient
+    wide_list = list(wide_cat.unbind(1))
+    wide_list = [wide[0].permute(1,2,0).cpu().numpy() for wide in wide_list]
+    out_fn = f"./example_outputs/CC_GOOD_POINTS_{filename_for_demo.split('.mp4')[0]}_out_{file_suffix}.mp4"
+    video_writer = cv2.VideoWriter(out_fn, cv2.VideoWriter_fourcc(*'MP4V'), 12.0, (2688,512))
+    for wide in wide_list:
+        video_writer.write(cv2.cvtColor(wide, cv2.COLOR_RGB2BGR))
+    video_writer.release()
+    print(f"Saved {out_fn}")
 
 
 def run_model(model, rgbs, S_max=128, N=64, iters=16, sw=None):
@@ -183,7 +207,7 @@ def main(
 
     # the idea in this file is to run the model on a demo video,
     # and return some visualizations
-    
+    filename = f"./stock_videos/{filename_for_demo}"
     exp_name = 'de00' # copy from dev repo
 
     print('filename', filename)
@@ -222,6 +246,8 @@ def main(
     if max_iters:
         idx = idx[:max_iters]
     
+    pass_on_trajs = None
+    all_frame_points = torch.tensor([])
     for si in idx:
         global_step += 1
         
@@ -240,16 +266,27 @@ def main(
         rgb_seq = F.interpolate(rgb_seq, image_size, mode='bilinear').unsqueeze(0) # 1,S,3,H,W
         
         with torch.no_grad():
-            trajs_e = run_model_forward_backward(model, rgb_seq, S_max=S, N=N, iters=iters, sw=sw_t)
+            trajs_e = run_model_forward_backward(model, rgb_seq, S_max=S, N=N, iters=iters, sw=sw_t, pass_on_trajs=pass_on_trajs)
             print(trajs_e.shape)
+        pass_on_trajs = trajs_e[0, -1, :, :].repeat(1, S, 1, 1)
+        all_frame_points = torch.cat([all_frame_points, trajs_e.detach().cpu()], dim=1)
 
         iter_time = time.time()-iter_start_time
         
         print('%s; step %06d/%d; itime %.2f' % (
             model_name, global_step, max_iters, iter_time))
+    # Use all points on whole video
+    rgb_seq_full = torch.from_numpy(rgbs[0:si+S]).permute(0, 3, 1, 2).to(torch.float32)
+    rgb_seq_full = F.interpolate(rgb_seq_full, image_size, mode='bilinear').unsqueeze(0)
+    annotate_whole_video(rgb_seq_full, all_frame_points, sw_t, file_suffix="ALL")
+    print("### Done ###")
         
             
     writer_t.close()
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--mp4_filename", action="store", dest="mp4_filename", default="P11_102_from_1-52_to_1-55.mp4")
+    args = parser.parse_args()
+    filename_for_demo = args.mp4_filename
     Fire(main)
