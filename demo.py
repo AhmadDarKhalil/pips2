@@ -43,22 +43,24 @@ def compute_pairwise_distances(tensor1, tensor2):
 
     return distances
 
-def run_model_forward_backward(model, rgbs, S_max=128, N=64, iters=16, sw=None):
+def run_model_forward_backward(model, rgbs, S_max=128, N=64, iters=16, sw=None, pass_on_trajs=None):
     rgbs = rgbs.cuda().float() # B, S, C, H, W
 
     B, S, C, H, W = rgbs.shape
     assert(B == 1)
+    if pass_on_trajs is None:
+        # Initialize points at the middle frame
+        N_ = np.sqrt(N).round().astype(np.int32)
+        grid_y, grid_x = utils.basic.meshgrid2d(B, N_, N_, stack=False, norm=False, device='cuda')
+        grid_y = 8 + grid_y.reshape(B, -1)/float(N_-1) * (H-16)
+        grid_x = 8 + grid_x.reshape(B, -1)/float(N_-1) * (W-16)
+        xy0 = torch.stack([grid_x, grid_y], dim=-1) # B, N_*N_, 2
+        _, S, C, H, W = rgbs.shape
 
-    # Initialize points at the middle frame
-    N_ = np.sqrt(N).round().astype(np.int32)
-    grid_y, grid_x = utils.basic.meshgrid2d(B, N_, N_, stack=False, norm=False, device='cuda')
-    grid_y = 8 + grid_y.reshape(B, -1)/float(N_-1) * (H-16)
-    grid_x = 8 + grid_x.reshape(B, -1)/float(N_-1) * (W-16)
-    xy0 = torch.stack([grid_x, grid_y], dim=-1) # B, N_*N_, 2
-    _, S, C, H, W = rgbs.shape
-
-    # Initialize trajectories at the middle frame
-    trajs_e_forward = xy0.unsqueeze(1).repeat(1, S, 1, 1)
+        # Initialize trajectories at the middle frame
+        trajs_e_forward = xy0.unsqueeze(1).repeat(1, S, 1, 1)
+    else:
+        trajs_e_forward = pass_on_trajs
 
     iter_start_time = time.time()
 
@@ -290,7 +292,7 @@ def main(
     # Use all points on whole video
     rgb_seq_full = torch.from_numpy(rgbs[0:si+S]).permute(0, 3, 1, 2).to(torch.float32)
     rgb_seq_full = F.interpolate(rgb_seq_full, image_size, mode='bilinear').unsqueeze(0)
-    annotate_whole_video(rgb_seq_full, window_points, sw_t, file_suffix="ALL")
+    annotate_video_with_dots(rgb_seq_full, window_points, sw_t, file_suffix="ALL")
     print("### Done ###")
         
             
