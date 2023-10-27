@@ -80,7 +80,7 @@ def run_model_forward_backward(model, rgbs, S_max=128, N=64, iters=16, sw=None, 
     print('average distence: ', dist.mean())
     print(f"Keep Good Points = {keep_good_points}")
     if keep_good_points:
-        keep_point = m < 2
+        keep_point = m < dist.mean()
     else:
         keep_point = m > dist.mean()
     #keep_point = m < 2 #dist.mean() # keep the point if it's less the average
