@@ -208,8 +208,8 @@ def main(
     
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument("--sample_idx", action="store", dest="sample_idx", default="000000")
-    parser.add_argument("--vis_track_type", action="store", dest="vis_track_type", default="gt")
+    parser.add_argument("--sample_idx", action="store", dest="sample_idx", default="000000", help="6 digit code for folder containing rgb.mp4 and track.npz files.")
+    parser.add_argument("--vis_track_type", action="store", dest="vis_track_type", default="gt", choices=["gt", "pred"], help="Choice to visualise ground truth or prediction tracks.")
     #parser.add_argument("--keep_good_points", action="store_true", dest="keep_good_points")
     parser.set_defaults(keep_good_points=False)
     args = parser.parse_args()
