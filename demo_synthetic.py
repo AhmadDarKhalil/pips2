@@ -26,7 +26,7 @@ def read_mp4(fn):
     return frames
 
 
-def load_sythetic_tracks(path):
+def load_synthetic_tracks(path):
     points = np.load(path)
     points = points["track_g"]
     return points[:, :, :2]
@@ -66,7 +66,7 @@ def visualise_track_ground_truths(image_size, rgbs, track_path, sw_t):
 
     annotate_video_with_dots([rgb_seq], [torch.from_numpy(trajs_g).unsqueeze(0)], sw_t, "GROUND_TRUTH")
 
-def visualise_track_predictions(image_size, rgbs, track_path, init_dir, S_here, S, max_iters, writer_t, log_freq, N):
+def visualise_track_predictions(model_name, image_size, rgbs, track_path, init_dir, S_here, S, iters, max_iters, writer_t, log_freq, N):
     global_step = 0
 
     model = Pips(stride=8).cuda()
@@ -80,7 +80,8 @@ def visualise_track_predictions(image_size, rgbs, track_path, init_dir, S_here, 
     if max_iters:
         idx = idx[:max_iters]
 
-    pass_on_trajs = torch.from_numpy(load_synthetic_tracks(track_path))[0, -1, :, :].repeat(1, S, 1, 1)
+    gt_tracks = torch.from_numpy(load_synthetic_tracks(track_path)).unsqueeze(0)
+    pass_on_trajs = gt_tracks[0, -1, :, :].repeat(1, S_here if S_here < S else S, 1, 1).cuda()
     window_points = []
     rgb_seq_full = []
     for si in idx:
@@ -102,7 +103,7 @@ def visualise_track_predictions(image_size, rgbs, track_path, init_dir, S_here, 
         rgb_seq_full.append(rgb_seq)
 
         with torch.no_grad():
-            trajs_e = run_model_forward_backward(model, rgb_seq, S_max=S, N=N, iters=iters, sw=sw_t, pass_on_trajs=pass_on_trajs)
+            trajs_e = run_model(model, rgb_seq, pass_on_trajs, S_max=S, N=N, iters=iters, sw=sw_t)
             print(trajs_e.shape)
         iter_time = time.time()-iter_start_time
         print('%s; step %06d/%d; itime %.2f' % (
@@ -113,7 +114,7 @@ def visualise_track_predictions(image_size, rgbs, track_path, init_dir, S_here, 
             break
         pass_on_trajs = trajs_e[0, -1, :, :].repeat(1, S, 1, 1)
         window_points.append(trajs_e.detach().cpu())
-    annotate_video_with_dots(rgb_seq_full, window_points, sw_t, file_suffix="PREDS")
+    annotate_video_with_dots(rgb_seq_full, window_points, sw_t, file_prefix="PREDS")
 
 
 def run_model(model, rgbs, init_trajs, S_max=128, N=64, iters=16, sw=None):
@@ -126,6 +127,9 @@ def run_model(model, rgbs, init_trajs, S_max=128, N=64, iters=16, sw=None):
     trajs_e = init_trajs
 
     iter_start_time = time.time()
+    print("######")
+    print(trajs_e.size(), rgbs.size())
+    print("######")
 
     preds, preds_anim, _, _ = model(trajs_e, rgbs, iters=iters, feat_init=None,beautify=True)
     trajs_e = preds[-1]
@@ -193,7 +197,10 @@ def main(
         )
         visualise_track_ground_truths(image_size, rgbs, track_path, sw_t)
     elif vis_track_type == "pred":
-        visualise_track_predictions(image_size, rgbs, track_path, init_dir, S_here, S, max_iters, writer_t, log_freq, N)
+        visualise_track_predictions(
+            model_name, image_size, rgbs, track_path, init_dir,
+            S_here, S, iters, max_iters, writer_t, log_freq, N
+        )
     else:
         print("Invalid vis_track_type value!")
     
