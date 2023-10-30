@@ -25,42 +25,118 @@ def read_mp4(fn):
     vidcap.release()
     return frames
 
-def annotate_video_with_dots(rgbs, frame_points, sw, file_prefix="GROUND_TRUTH"):
+
+def load_sythetic_tracks(path):
+    points = np.load(path)
+    points = points["track_g"]
+    return points[:, :, :2]
+
+def annotate_video_with_dots(rgbs, window_points, sw, file_prefix="GROUND_TRUTH"):
     linewidth = 2
-    #print("Number of windows = {len(window_points)}")
+    print(f"Number of windows = {len(window_points)}")
     out_fn = f"{file_prefix}_synthetic_{args.sample_idx}.mp4"
     video_writer = cv2.VideoWriter(out_fn, cv2.VideoWriter_fourcc(*'MP4V'), 12.0, (2688,512))
-    #for window_idx, frame_points in  enumerate(window_points):
-        #print(f"Annotating window: {window_idx+1}")
-    # visualize the input
-    o1 = sw.summ_rgbs('inputs/rgbs', utils.improc.preprocess_color(rgbs[0:1]).unbind(1))
-    # visualize the trajs overlaid on the rgbs
-    o2 = sw.summ_traj2ds_on_rgbs('outputs/trajs_on_rgbs', frame_points[0:1], utils.improc.preprocess_color(rgbs[0:1]), cmap='spring', linewidth=linewidth)
-    # visualize the trajs alone
-    o3 = sw.summ_traj2ds_on_rgbs('outputs/trajs_on_black', frame_points[0:1], torch.ones_like(rgbs[0:1])*-0.5, cmap='spring', linewidth=linewidth)
-    # concat these for a synced wide vis
-    wide_cat = torch.cat([o1, o2, o3], dim=-1)
-    sw.summ_rgbs('outputs/wide_cat', wide_cat.unbind(1))
+    for window_idx, frame_points in  enumerate(window_points):
+        print(f"Annotating window: {window_idx+1}")
+        # visualize the input
+        o1 = sw.summ_rgbs('inputs/rgbs', utils.improc.preprocess_color(rgbs[window_idx][0:1]).unbind(1))
+        # visualize the trajs overlaid on the rgbs
+        o2 = sw.summ_traj2ds_on_rgbs('outputs/trajs_on_rgbs', frame_points[0:1], utils.improc.preprocess_color(rgbs[window_idx][0:1]), cmap='spring', linewidth=linewidth)
+        # visualize the trajs alone
+        o3 = sw.summ_traj2ds_on_rgbs('outputs/trajs_on_black', frame_points[0:1], torch.ones_like(rgbs[window_idx][0:1])*-0.5, cmap='spring', linewidth=linewidth)
+        # concat these for a synced wide vis
+        wide_cat = torch.cat([o1, o2, o3], dim=-1)
+        sw.summ_rgbs('outputs/wide_cat', wide_cat.unbind(1))
 
-    # write to disk, in case that's more convenient
-    wide_list = list(wide_cat.unbind(1))
-    #wide_list = [wide[0].permute(1,2,0).cpu().numpy() for wide in wide_list]
-    for wide in wide_list:
-        video_writer.write(cv2.cvtColor(wide[0].permute(1,2,0).cpu().numpy(), cv2.COLOR_RGB2BGR))
+        # write to disk, in case that's more convenient
+        wide_list = list(wide_cat.unbind(1))
+        #wide_list = [wide[0].permute(1,2,0).cpu().numpy() for wide in wide_list]
+        for wide in wide_list:
+            video_writer.write(cv2.cvtColor(wide[0].permute(1,2,0).cpu().numpy(), cv2.COLOR_RGB2BGR))
 
     video_writer.release()
     print(f"Saved {out_fn}")
 
 
-def visualise_track_ground_truths(image_size, rgbs, track_dir, sw_t):
+def visualise_track_ground_truths(image_size, rgbs, track_path, sw_t):
     rgb_seq = torch.from_numpy(rgbs).permute(0,3,1,2).to(torch.float32) # S,3,H,W
     rgb_seq = F.interpolate(rgb_seq, image_size, mode='bilinear').unsqueeze(0) # 1,S,3,H,W
 
-    points = np.load(f"{track_dir}track.npz")
-    points = points["track_g"]
-    trajs_g = points[:, :, :2]
+    trajs_g = load_synthetic_tracks(track_path)
 
-    annotate_video_with_dots(rgb_seq, torch.from_numpy(trajs_g).unsqueeze(0), sw_t, "GROUND_TRUTH")
+    annotate_video_with_dots([rgb_seq], [torch.from_numpy(trajs_g).unsqueeze(0)], sw_t, "GROUND_TRUTH")
+
+def visualise_track_predictions(image_size, rgbs, track_path, init_dir, S_here, S, max_iters, writer_t, log_freq, N):
+    global_step = 0
+
+    model = Pips(stride=8).cuda()
+    parameters = list(model.parameters())
+    if init_dir:
+        _ = saverloader.load(init_dir, model)
+    global_step = 0
+    model.eval()
+
+    idx = list(range(0, max(S_here-S,1), S))
+    if max_iters:
+        idx = idx[:max_iters]
+
+    pass_on_trajs = torch.from_numpy(load_synthetic_tracks(track_path))[0, -1, :, :].repeat(1, S, 1, 1)
+    window_points = []
+    rgb_seq_full = []
+    for si in idx:
+        global_step += 1
+
+        iter_start_time = time.time()
+
+        sw_t = utils.improc.Summ_writer(
+            writer=writer_t,
+            global_step=global_step,
+            log_freq=log_freq,
+            fps=6,
+            scalar_freq=int(log_freq/2),
+            just_gif=True)
+
+        rgb_seq = rgbs[si:si+S]
+        rgb_seq = torch.from_numpy(rgb_seq).permute(0,3,1,2).to(torch.float32) # S,3,H,W
+        rgb_seq = F.interpolate(rgb_seq, image_size, mode='bilinear').unsqueeze(0) # 1,S,3,H,W
+        rgb_seq_full.append(rgb_seq)
+
+        with torch.no_grad():
+            trajs_e = run_model_forward_backward(model, rgb_seq, S_max=S, N=N, iters=iters, sw=sw_t, pass_on_trajs=pass_on_trajs)
+            print(trajs_e.shape)
+        iter_time = time.time()-iter_start_time
+        print('%s; step %06d/%d; itime %.2f' % (
+            model_name, global_step, max_iters, iter_time))
+
+        if trajs_e.size(2) == 0:
+            print("Exiting early because no points left...")
+            break
+        pass_on_trajs = trajs_e[0, -1, :, :].repeat(1, S, 1, 1)
+        window_points.append(trajs_e.detach().cpu())
+    annotate_video_with_dots(rgb_seq_full, window_points, sw_t, file_suffix="PREDS")
+
+
+def run_model(model, rgbs, init_trajs, S_max=128, N=64, iters=16, sw=None):
+    rgbs = rgbs.cuda().float() # B, S, C, H, W
+
+    B, S, C, H, W = rgbs.shape
+    assert(B==1)
+
+    # Initialise points in window
+    trajs_e = init_trajs
+
+    iter_start_time = time.time()
+
+    preds, preds_anim, _, _ = model(trajs_e, rgbs, iters=iters, feat_init=None,beautify=True)
+    trajs_e = preds[-1]
+
+    iter_time = time.time()-iter_start_time
+    print('inference time: %.2f seconds (%.1f fps)' % (iter_time, S/iter_time))
+    return trajs_e
+
+
+def run_model_forward_backward():
+    pass
 
 
 def main(
@@ -104,6 +180,8 @@ def main(
 
     writer_t = SummaryWriter(log_dir + '/' + model_name + '/t', max_queue=10, flush_secs=60)
 
+    track_path = f"{filename.split('rgb.mp4')[0]}track.npz"
+
     if vis_track_type == "gt":
         sw_t = utils.improc.Summ_writer(
             writer=writer_t,
@@ -113,9 +191,9 @@ def main(
             scalar_freq=int(log_freq/2),
             just_gif=True
         )
-        visualise_track_ground_truths(image_size, rgbs, filename.split("rgb.mp4")[0], sw_t)
+        visualise_track_ground_truths(image_size, rgbs, track_path, sw_t)
     elif vis_track_type == "pred":
-        pass
+        visualise_track_predictions(image_size, rgbs, track_path, init_dir, S_here, S, max_iters, writer_t, log_freq, N)
     else:
         print("Invalid vis_track_type value!")
     
