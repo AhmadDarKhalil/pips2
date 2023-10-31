@@ -29,9 +29,9 @@ def read_mp4(fn):
 def load_synthetic_tracks(path):
     points = np.load(path)
     points = points["track_g"]
-    return points[:, :, :2]
+    return points[:, :, :2], points[:, :, 3]
 
-def annotate_video_with_dots(rgbs, window_points, sw, file_prefix="GROUND_TRUTH"):
+def annotate_video_with_dots(rgbs, window_points, sw, file_prefix="GROUND_TRUTH", valids=None):
     linewidth = 2
     print(f"Number of windows = {len(window_points)}")
     out_fn = f"./synthetic_outputs/{file_prefix}_synthetic_{args.sample_idx}.mp4"
@@ -41,9 +41,9 @@ def annotate_video_with_dots(rgbs, window_points, sw, file_prefix="GROUND_TRUTH"
         # visualize the input
         o1 = sw.summ_rgbs('inputs/rgbs', utils.improc.preprocess_color(rgbs[window_idx][0:1]).unbind(1))
         # visualize the trajs overlaid on the rgbs
-        o2 = sw.summ_traj2ds_on_rgbs('outputs/trajs_on_rgbs', frame_points[0:1], utils.improc.preprocess_color(rgbs[window_idx][0:1]), cmap='spring', linewidth=linewidth)
+        o2 = sw.summ_traj2ds_on_rgbs('outputs/trajs_on_rgbs', frame_points[0:1], utils.improc.preprocess_color(rgbs[window_idx][0:1]), cmap='spring', linewidth=linewidth, valids=valids)
         # visualize the trajs alone
-        o3 = sw.summ_traj2ds_on_rgbs('outputs/trajs_on_black', frame_points[0:1], torch.ones_like(rgbs[window_idx][0:1])*-0.5, cmap='spring', linewidth=linewidth)
+        o3 = sw.summ_traj2ds_on_rgbs('outputs/trajs_on_black', frame_points[0:1], torch.ones_like(rgbs[window_idx][0:1])*-0.5, cmap='spring', linewidth=linewidth, valids=valids)
         # concat these for a synced wide vis
         wide_cat = torch.cat([o1, o2, o3], dim=-1)
         sw.summ_rgbs('outputs/wide_cat', wide_cat.unbind(1))
@@ -63,9 +63,15 @@ def visualise_track_ground_truths(image_size, rgbs, track_path, sw_t):
     rgb_seq = F.interpolate(rgb_seq, image_size, mode='bilinear').unsqueeze(0) # 1,S,3,H,W
     print(rgb_seq.size())
 
-    trajs_g = load_synthetic_tracks(track_path)
+    trajs_g, valids_g = load_synthetic_tracks(track_path)
 
-    annotate_video_with_dots([rgb_seq], [torch.from_numpy(trajs_g).unsqueeze(0)], sw_t, "GROUND_TRUTH")
+    annotate_video_with_dots(
+        [rgb_seq],
+        [torch.from_numpy(trajs_g).unsqueeze(0)],
+        sw_t,
+        "GROUND_TRUTH",
+        valids=torch.from_numpy(valids_g).unsqueeze(0)
+    )
 
 def visualise_track_predictions(model_name, image_size, rgbs, track_path, init_dir, S_here, S, iters, max_iters, writer_t, log_freq, N):
     global_step = 0
@@ -81,7 +87,8 @@ def visualise_track_predictions(model_name, image_size, rgbs, track_path, init_d
     if max_iters:
         idx = idx[:max_iters]
 
-    gt_tracks = torch.from_numpy(load_synthetic_tracks(track_path)).unsqueeze(0)
+    gt_tracks, _ = load_synthetic_tracks(track_path)
+    gt_tracks = torch.from_numpy(gt_tracks).unsqueeze(0)
     pass_on_trajs = gt_tracks[0, 0, :, :].repeat(1, S_here if S_here < S else S, 1, 1).cuda()
     window_points = []
     rgb_seq_full = []
