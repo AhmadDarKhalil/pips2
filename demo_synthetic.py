@@ -122,7 +122,7 @@ def visualise_track_predictions(model_name, image_size, rgbs, track_path, init_d
             break
         pass_on_trajs = trajs_e[0, -1, :, :].repeat(1, S, 1, 1)
         window_points.append(trajs_e.detach().cpu())
-    annotate_video_with_dots(rgb_seq_full, window_points, sw_t, file_prefix="PREDS")
+    annotate_video_with_dots(rgb_seq_full, window_points, sw_t, file_prefix=f"{args.model_type}_PREDS")
 
 
 def run_model(model, rgbs, init_trajs, S_max=128, N=64, iters=16, sw=None):
@@ -167,6 +167,7 @@ def main(
     init_dir='/home/deepthought/Ahmad/pips2/reference_model',
     device_ids=[0],
 ):
+    print(f"Model Pathway: {init_dir}")
     track_dir = f"/media/deepthought/DATA/Ahmad/pointodyssey/epic/ae_24_96_384x512/{sample_idx}"
     filename = f"{track_dir}/rgb.mp4"
     exp_name = 'de00' # copy from dev repo
@@ -220,9 +221,11 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--sample_idx", action="store", dest="sample_idx", default="000000", help="6 digit code for folder containing rgb.mp4 and track.npz files.")
     parser.add_argument("--vis_track_type", action="store", dest="vis_track_type", default="gt", choices=["gt", "pred"], help="Choice to visualise ground truth or prediction tracks.")
+    parser.add_argument("--model_type", action="store", dest="model_type", default="po", choices=["po","epic"], help="'po'=Original model trained on Point Odyssey, 'epic'=Original model train on P.O. and then fine-tuned on synthetic EPIC.")
     #parser.add_argument("--keep_good_points", action="store_true", dest="keep_good_points")
-    parser.set_defaults(keep_good_points=False)
+    #parser.set_defaults(keep_good_points=False)
     args = parser.parse_args()
     #keep_good_points = args.keep_good_points
     #print(f"### Keeping {'GOOD' if keep_good_points else 'BAD'} Points ###")
-    Fire(main(sample_idx=args.sample_idx, vis_track_type=args.vis_track_type))
+    model_dir = f"/home/deepthought/Ahmad/pips2/{'reference_model_epic' if args.model_type == 'epic' else 'reference_model'}"
+    Fire(main(sample_idx=args.sample_idx, vis_track_type=args.vis_track_type, init_dir=model_dir))
