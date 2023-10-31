@@ -50,7 +50,6 @@ def annotate_video_with_dots(rgbs, window_points, sw, file_prefix="GROUND_TRUTH"
 
         # write to disk, in case that's more convenient
         wide_list = list(wide_cat.unbind(1))
-        #wide_list = [wide[0].permute(1,2,0).cpu().numpy() for wide in wide_list]
         for wide in wide_list:
             video_writer.write(cv2.cvtColor(wide[0].permute(1,2,0).cpu().numpy(), cv2.COLOR_RGB2BGR))
 
@@ -72,6 +71,7 @@ def visualise_track_ground_truths(image_size, rgbs, track_path, sw_t):
         "GROUND_TRUTH",
         valids=torch.from_numpy(valids_g).unsqueeze(0)
     )
+
 
 def visualise_track_predictions(model_name, image_size, rgbs, track_path, init_dir, S_here, S, iters, max_iters, writer_t, log_freq, N):
     global_step = 0
@@ -122,7 +122,40 @@ def visualise_track_predictions(model_name, image_size, rgbs, track_path, init_d
             break
         pass_on_trajs = trajs_e[0, -1, :, :].repeat(1, S, 1, 1)
         window_points.append(trajs_e.detach().cpu())
+    avg_error = calculate_ground_truth_error(gt_tracks, window_points)
+    print(f"### Avg. Error From Ground Truth = {avg_error} ###")
     annotate_video_with_dots(rgb_seq_full, window_points, sw_t, file_prefix=f"{args.model_type}_PREDS")
+
+
+def calculate_ground_truth_error(gt_tracks, window_points):
+    s = 0
+    window_track_diffs = []
+    for frame_points in window_points:
+        window_seq_len = frame_points.size(1)
+        window_gt = gt_tracks[:, s:s+window_seq_len, :, :]
+        distances = compute_pairwise_distances(window_gt, frame_points)
+        s += window_seq_len
+        window_track_diffs.append(distances)
+    return torch.mean(torch.cat(window_track_diffs)).item()
+
+
+def compute_pairwise_distances(tensor1, tensor2):
+    # Ensure that both input tensors have the same shape
+    assert tensor1.shape == tensor2.shape, "Input tensors must have the same shape"
+
+    # Get the number of frames and points
+    _,num_frames, num_points, _ = tensor1.shape
+
+    # Initialize an empty tensor to store distances
+    distances = torch.zeros(num_frames, num_points)
+
+    for i in range(num_frames):
+        for j in range(num_points):
+            # Compute the Euclidean distance between points at the same index in both tensors
+            distance = torch.norm(tensor1[0,i, j] - tensor2[0,i, j], dim=-1)
+            distances[i, j] = distance
+
+    return distances
 
 
 def run_model(model, rgbs, init_trajs, S_max=128, N=64, iters=16, sw=None):
@@ -219,13 +252,19 @@ def main(
     
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument("--sample_idx", action="store", dest="sample_idx", default="000000", help="6 digit code for folder containing rgb.mp4 and track.npz files.")
-    parser.add_argument("--vis_track_type", action="store", dest="vis_track_type", default="gt", choices=["gt", "pred"], help="Choice to visualise ground truth or prediction tracks.")
-    parser.add_argument("--model_type", action="store", dest="model_type", default="po", choices=["po","epic"], help="'po'=Original model trained on Point Odyssey, 'epic'=Original model train on P.O. and then fine-tuned on synthetic EPIC.")
-    #parser.add_argument("--keep_good_points", action="store_true", dest="keep_good_points")
-    #parser.set_defaults(keep_good_points=False)
+    parser.add_argument(
+        "--sample_idx", action="store", dest="sample_idx", default="000000",
+        help="6 digit code for folder containing rgb.mp4 and track.npz files."
+    )
+    parser.add_argument(
+        "--vis_track_type", action="store", dest="vis_track_type", default="gt", choices=["gt", "pred"],
+        help="Choice to visualise ground truth or prediction tracks."
+    )
+    parser.add_argument(
+        "--model_type", action="store", dest="model_type", default="po", choices=["po","epic"],
+        help="'po'=Original model trained on Point Odyssey, 'epic'=P.O. and then fine-tuned on synthetic EPIC."
+    )
     args = parser.parse_args()
-    #keep_good_points = args.keep_good_points
-    #print(f"### Keeping {'GOOD' if keep_good_points else 'BAD'} Points ###")
+
     model_dir = f"/home/deepthought/Ahmad/pips2/{'reference_model_epic' if args.model_type == 'epic' else 'reference_model'}"
     Fire(main(sample_idx=args.sample_idx, vis_track_type=args.vis_track_type, init_dir=model_dir))
