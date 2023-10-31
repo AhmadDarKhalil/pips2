@@ -34,8 +34,8 @@ def load_synthetic_tracks(path):
 def annotate_video_with_dots(rgbs, window_points, sw, file_prefix="GROUND_TRUTH"):
     linewidth = 2
     print(f"Number of windows = {len(window_points)}")
-    out_fn = f"{file_prefix}_synthetic_{args.sample_idx}.mp4"
-    video_writer = cv2.VideoWriter(out_fn, cv2.VideoWriter_fourcc(*'MP4V'), 12.0, (2688,512))
+    out_fn = f"./synthetic_outputs/{file_prefix}_synthetic_{args.sample_idx}.mp4"
+    video_writer = cv2.VideoWriter(out_fn, cv2.VideoWriter_fourcc(*'MP4V'), 12.0, (1536,384))
     for window_idx, frame_points in  enumerate(window_points):
         print(f"Annotating window: {window_idx+1}")
         # visualize the input
@@ -61,6 +61,7 @@ def annotate_video_with_dots(rgbs, window_points, sw, file_prefix="GROUND_TRUTH"
 def visualise_track_ground_truths(image_size, rgbs, track_path, sw_t):
     rgb_seq = torch.from_numpy(rgbs).permute(0,3,1,2).to(torch.float32) # S,3,H,W
     rgb_seq = F.interpolate(rgb_seq, image_size, mode='bilinear').unsqueeze(0) # 1,S,3,H,W
+    print(rgb_seq.size())
 
     trajs_g = load_synthetic_tracks(track_path)
 
@@ -81,7 +82,7 @@ def visualise_track_predictions(model_name, image_size, rgbs, track_path, init_d
         idx = idx[:max_iters]
 
     gt_tracks = torch.from_numpy(load_synthetic_tracks(track_path)).unsqueeze(0)
-    pass_on_trajs = gt_tracks[0, -1, :, :].repeat(1, S_here if S_here < S else S, 1, 1).cuda()
+    pass_on_trajs = gt_tracks[0, 0, :, :].repeat(1, S_here if S_here < S else S, 1, 1).cuda()
     window_points = []
     rgb_seq_full = []
     for si in idx:
@@ -151,7 +152,7 @@ def main(
     stride=8,
     timestride=1, # temporal stride of the model
     iters=16, # inference steps of the model
-    image_size=(512,896), # input resolution
+    image_size=(384,512),#(512,896), #(480,854), # input resolution
     max_iters=4, # number of clips to run
     shuffle=False, # dataset shuffling
     log_freq=1, # how often to make image summaries
@@ -159,7 +160,8 @@ def main(
     init_dir='/home/deepthought/Ahmad/pips2/reference_model',
     device_ids=[0],
 ):
-    filename = f"/media/deepthought/DATA/Ahmad/pointodyssey/epic/ae_24_96_384x512/{sample_idx}/rgb.mp4"
+    track_dir = f"/media/deepthought/DATA/Ahmad/pointodyssey/epic/ae_24_96_384x512/{sample_idx}"
+    filename = f"{track_dir}/rgb.mp4"
     exp_name = 'de00' # copy from dev repo
 
     print('filename', filename)
@@ -167,6 +169,7 @@ def main(
     print('name', name)
 
     rgbs = read_mp4(filename)
+    print(len(rgbs))
     rgbs = np.stack(rgbs, axis=0) # S,H,W,3
     rgbs = rgbs[:,:,:,::-1].copy() # BGR->RGB
     rgbs = rgbs[::timestride]
@@ -184,7 +187,7 @@ def main(
 
     writer_t = SummaryWriter(log_dir + '/' + model_name + '/t', max_queue=10, flush_secs=60)
 
-    track_path = f"{filename.split('rgb.mp4')[0]}track.npz"
+    track_path = f"{track_dir}/track.npz"
 
     if vis_track_type == "gt":
         sw_t = utils.improc.Summ_writer(
