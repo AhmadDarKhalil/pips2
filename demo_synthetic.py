@@ -14,6 +14,9 @@ from pathlib import Path
 from PIL import Image
 import argparse
 import os
+import matplotlib.pyplot as plt
+import math
+
 
 def read_mp4(fn):
     vidcap = cv2.VideoCapture(fn)
@@ -31,6 +34,7 @@ def load_synthetic_tracks(path):
     points = np.load(path)
     points = points["track_g"]
     return points[:, :, :2], points[:, :, 3]
+
 
 def annotate_video_with_dots(rgbs, window_points, sw, sample_idx_name, file_prefix="GROUND_TRUTH", valids=None):
     linewidth = 2
@@ -239,11 +243,61 @@ def compare_gt_po_epic(
     return po_avg_error, po_track_avg_errors, epic_avg_error, epic_track_avg_errors
 
 
+def plot_error_diff(vids_diffs, tracks_diffs, split):
+    new_min_vids = -(math.floor(abs(min(vids_diffs))/0.5) * 0.5)
+    new_max_vids = math.floor(abs(max(vids_diffs))/0.5) * 0.5
+
+    new_min_tracks = -(math.floor(abs(min(tracks_diffs))/5.0) * 5.0)
+    new_max_tracks = math.floor(abs(max(tracks_diffs))/5.0) * 5.0
+
+    vids_bins = np.concatenate([np.array([min(vids_diffs)]), np.arange(new_min_vids, 0, 0.5), np.arange(0, new_max_vids, 0.5), np.array([max(vids_diffs)])])
+    tracks_bins = np.concatenate([np.array([min(tracks_diffs)]), np.arange(new_min_tracks, 0, 5.0), np.arange(0, new_max_tracks, 5.0), np.array([max(tracks_diffs)])])
+    vids_hist, vids_bin_edges = np.histogram(vids_diffs, bins=vids_bins)
+    tracks_hist, tracks_bin_edges = np.histogram(tracks_diffs, bins=tracks_bins)
+    fig, axs = plt.subplots(2, 1, figsize=(10, 6))
+    fig.suptitle(f"Difference in Error Between {'Val.' if on_val else 'Train'} Samples on P.O. & EPIC")
+
+    # Plot bars with positive or negative heights based on bin values
+    for i in range(len(vids_hist)):
+        if i == 0:
+            width = round(abs(min(vids_diffs)) - abs(new_min_vids), 2)
+        elif i == len(vids_hist)-1:
+            width = round(abs(max(vids_diffs)) - abs(new_max_vids), 2)
+        else:
+            width = 0.5
+        if vids_bin_edges[i] < 0:
+            print(vids_bin_edges[i], -vids_hist[i])
+            axs[0].bar(vids_bin_edges[i], -vids_hist[i], width=width, color='red', align='edge')
+        else:
+            if vids_bin_edges[i] == 0:
+                print(vids_bin_edges[i])
+                print(vids_hist[i])
+            axs[0].bar(vids_bin_edges[i], vids_hist[i], width=width, color='blue', align='edge')
+
+    for i in range(len(tracks_hist)):
+        if i == 0:
+            width = round(abs(min(tracks_diffs)) - abs(new_min_tracks), 2)
+        elif i == len(vids_hist)-1:
+            width = round(abs(max(tracks_diffs)) - abs(new_max_tracks), 2)
+        else:
+            width = 5.0
+        if tracks_bin_edges[i] < 0:
+            axs[1].bar(tracks_bin_edges[i], -tracks_hist[i], width=width, color='red', align='edge')
+        else:
+            axs[1].bar(tracks_bin_edges[i], tracks_hist[i], width=width, color='blue', align='edge')
+
+    axs[0].set_title("Videos")
+    axs[1].set_title("Tracks")
+    fig.tight_layout()
+    fig.savefig(f"{split}_samples_error_diff_hists.png")
+
+
 def main(
     sample_idx="000000",
     save_vis=False,
     aggregate_all=False,
     on_val=False,
+    plot_hists=False,
     S=48,
     N=1024,
     stride=8,
@@ -264,7 +318,9 @@ def main(
 
     if aggregate_all:
         num_vids_better, total_vids = 0, 0
+        vids_diffs = []
         num_tracks_better, total_tracks = 0, 0
+        tracks_diffs = []
         #for i in range(0, 100):
         counter, sample_num = 0, 0
         hundred_vids = False
@@ -298,17 +354,27 @@ def main(
             total_vids += 1
             counter += 1
             sample_num += 1
+            vids_diffs.append(po_avg_error - epic_avg_error)
             if epic_avg_error < po_avg_error:
                 num_vids_better += 1
 
             # Count tracks better on EPIC model
             num_tracks_better += torch.sum((epic_track_avg_errors < po_track_avg_errors).int(), dim=0).item()
             total_tracks += po_track_avg_errors.size(0)
+            temp_diffs = po_track_avg_errors - epic_track_avg_errors
+            tracks_diffs.extend(list(temp_diffs.numpy()))
 
             if counter == 100:
                 hundred_vids = True
         print(f"Percentage of Videos Better on EPIC -> {(num_vids_better/total_vids)*100.0}% ({num_vids_better}/{total_vids})")
         print(f"Percentage of Tracks Better on EPIC -> {(num_tracks_better/total_tracks)*100.0}% ({num_tracks_better}/{total_tracks})")
+        # Create histograms of difference in better vids/tracks
+        if plot_hists:
+            plot_error_diff(
+                vids_diffs,
+                tracks_diffs,
+                "val" if on_val else "train"
+            )
     else:
         track_dir = f"/media/deepthought/DATA/Ahmad/pointodyssey/epic/{dataset_split_dir}/{sample_idx}"
         filename = f"{track_dir}/rgb.mp4"
@@ -353,17 +419,23 @@ if __name__ == '__main__':
         "--on_val", action="store_true", dest="on_val",
         help="True=Use validation videos, False=Use training videos"
     )
+    parser.add_argument(
+        "--plot_hists", action="store_true", dest="plot_hists"
+    )
     parser.set_defaults(save_vis=False)
     parser.set_defaults(aggregate_all=False)
     parser.set_defaults(on_val=False)
+    parser.set_defaults(plot_hists=False)
     args = parser.parse_args()
     print(f"save_vis={args.save_vis}")
     print(f"aggregate_all={args.aggregate_all}")
     print(f"on_val={args.on_val}")
+    print(f"plot_hists={args.plot_hists}")
 
     Fire(main(
         sample_idx=args.sample_idx,
         save_vis=args.save_vis,
         aggregate_all=args.aggregate_all,
-        on_val=args.on_val
+        on_val=args.on_val,
+        plot_hists=args.plot_hists
     ))
