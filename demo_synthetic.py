@@ -243,6 +243,7 @@ def main(
     sample_idx="000000",
     save_vis=False,
     aggregate_all=False,
+    on_val=False,
     S=48,
     N=1024,
     stride=8,
@@ -256,6 +257,10 @@ def main(
     device_ids=[0],
 ):
     exp_name = 'de00' # copy from dev repo
+    if on_val:
+        dataset_split_dir = "ae_24_96_384x512_val"
+    else:
+        dataset_split_dir = "ae_24_96_384x512"
 
     if aggregate_all:
         num_vids_better, total_vids = 0, 0
@@ -265,7 +270,7 @@ def main(
         hundred_vids = False
         while not hundred_vids:
             sample_idx = str(sample_num).zfill(6)
-            track_dir = f"/media/deepthought/DATA/Ahmad/pointodyssey/epic/ae_24_96_384x512/{sample_idx}"
+            track_dir = f"/media/deepthought/DATA/Ahmad/pointodyssey/epic/{dataset_split_dir}/{sample_idx}"
             filename = f"{track_dir}/rgb.mp4"
             if not os.path.exists(filename):
                 print("Path does not exist, skipping...")
@@ -305,7 +310,7 @@ def main(
         print(f"Percentage of Videos Better on EPIC -> {(num_vids_better/total_vids)*100.0}% ({num_vids_better}/{total_vids})")
         print(f"Percentage of Tracks Better on EPIC -> {(num_tracks_better/total_tracks)*100.0}% ({num_tracks_better}/{total_tracks})")
     else:
-        track_dir = f"/media/deepthought/DATA/Ahmad/pointodyssey/epic/ae_24_96_384x512/{sample_idx}"
+        track_dir = f"/media/deepthought/DATA/Ahmad/pointodyssey/epic/{dataset_split_dir}/{sample_idx}"
         filename = f"{track_dir}/rgb.mp4"
 
         print('filename', filename)
@@ -344,14 +349,21 @@ if __name__ == '__main__':
         "--aggregate_all", action="store_true", dest="aggregate_all",
         help="True=Ignore sample_idx and compute % better for 100 train/val, False=Compute difference of errors for one video"
     )
+    parser.add_argument(
+        "--on_val", action="store_true", dest="on_val",
+        help="True=Use validation videos, False=Use training videos"
+    )
     parser.set_defaults(save_vis=False)
     parser.set_defaults(aggregate_all=False)
+    parser.set_defaults(on_val=False)
     args = parser.parse_args()
     print(f"save_vis={args.save_vis}")
     print(f"aggregate_all={args.aggregate_all}")
+    print(f"on_val={args.on_val}")
 
     Fire(main(
         sample_idx=args.sample_idx,
         save_vis=args.save_vis,
-        aggregate_all=args.aggregate_all
+        aggregate_all=args.aggregate_all,
+        on_val=args.on_val
     ))
