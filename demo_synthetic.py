@@ -13,6 +13,7 @@ import cv2
 from pathlib import Path
 from PIL import Image
 import argparse
+import os
 
 def read_mp4(fn):
     vidcap = cv2.VideoCapture(fn)
@@ -31,10 +32,10 @@ def load_synthetic_tracks(path):
     points = points["track_g"]
     return points[:, :, :2], points[:, :, 3]
 
-def annotate_video_with_dots(rgbs, window_points, sw, file_prefix="GROUND_TRUTH", valids=None):
+def annotate_video_with_dots(rgbs, window_points, sw, sample_idx_name, file_prefix="GROUND_TRUTH", valids=None):
     linewidth = 2
     print(f"Number of windows = {len(window_points)}")
-    out_fn = f"./synthetic_outputs/{file_prefix}_synthetic_{args.sample_idx}.mp4"
+    out_fn = f"./synthetic_outputs/TEST_{file_prefix}_synthetic_{sample_idx_name}.mp4"
     video_writer = cv2.VideoWriter(out_fn, cv2.VideoWriter_fourcc(*'MP4V'), 12.0, (1536,384))
     for window_idx, frame_points in  enumerate(window_points):
         print(f"Annotating window: {window_idx+1}")
@@ -57,7 +58,7 @@ def annotate_video_with_dots(rgbs, window_points, sw, file_prefix="GROUND_TRUTH"
     print(f"Saved {out_fn}")
 
 
-def visualise_track_ground_truths(image_size, rgbs, track_path, sw_t):
+def visualise_track_ground_truths(image_size, rgbs, track_path, sw_t, sample_idx_name):
     rgb_seq = torch.from_numpy(rgbs).permute(0,3,1,2).to(torch.float32) # S,3,H,W
     rgb_seq = F.interpolate(rgb_seq, image_size, mode='bilinear').unsqueeze(0) # 1,S,3,H,W
     print(rgb_seq.size())
@@ -68,12 +69,17 @@ def visualise_track_ground_truths(image_size, rgbs, track_path, sw_t):
         [rgb_seq],
         [torch.from_numpy(trajs_g).unsqueeze(0)],
         sw_t,
+        sample_idx_name,
         "GROUND_TRUTH",
         valids=torch.from_numpy(valids_g).unsqueeze(0)
     )
 
 
-def visualise_track_predictions(model_name, image_size, rgbs, track_path, init_dir, S_here, S, iters, max_iters, writer_t, log_freq, N):
+def visualise_track_predictions(
+    model_name, image_size, rgbs, track_path, init_dir,
+    S_here, S, iters, max_iters, writer_t, log_freq, N,
+    sample_idx_name, save_vis, model_type
+):
     global_step = 0
 
     model = Pips(stride=8).cuda()
@@ -122,9 +128,12 @@ def visualise_track_predictions(model_name, image_size, rgbs, track_path, init_d
             break
         pass_on_trajs = trajs_e[0, -1, :, :].repeat(1, S, 1, 1)
         window_points.append(trajs_e.detach().cpu())
-    avg_error = calculate_ground_truth_error(gt_tracks, window_points)
-    print(f"### Avg. Error From Ground Truth = {avg_error} ###")
-    annotate_video_with_dots(rgb_seq_full, window_points, sw_t, file_prefix=f"{args.model_type}_PREDS")
+
+    if save_vis:
+        annotate_video_with_dots(rgb_seq_full, window_points, sw_t, sample_idx_name, file_prefix=f"{model_type}_PREDS")
+
+    avg_error, error_matrix = calculate_ground_truth_error(gt_tracks, window_points)
+    return avg_error, torch.mean(error_matrix, dim=0)
 
 
 def calculate_ground_truth_error(gt_tracks, window_points):
@@ -136,7 +145,9 @@ def calculate_ground_truth_error(gt_tracks, window_points):
         distances = compute_pairwise_distances(window_gt, frame_points)
         s += window_seq_len
         window_track_diffs.append(distances)
-    return torch.mean(torch.cat(window_track_diffs)).item()
+    error_matrix = torch.cat(window_track_diffs)
+    print(f"Error Matrix Size = {error_matrix.size()}")
+    return torch.mean(error_matrix).item(), error_matrix
 
 
 def compute_pairwise_distances(tensor1, tensor2):
@@ -180,13 +191,58 @@ def run_model(model, rgbs, init_trajs, S_max=128, N=64, iters=16, sw=None):
     return trajs_e
 
 
-def run_model_forward_backward():
-    pass
+def compare_gt_po_epic(
+    video_path, track_path, sample_idx, save_vis, model_name,
+    image_size, S, iters, max_iters, log_freq, N, log_dir, timestride
+):
+    # Create log writer for GT, PO and EPIC
+    gt_writer_t = SummaryWriter(f"{log_dir}/{model_name}/gt/t", max_queue=10, flush_secs=60)
+    po_writer_t = SummaryWriter(f"{log_dir}/{model_name}/po/t", max_queue=10, flush_secs=60)
+    epic_writer_t = SummaryWriter(f"{log_dir}/{model_name}/epic/t", max_queue=10, flush_secs=60)
+
+    # Load video into tensor
+    rgbs = read_mp4(video_path)
+    print(len(rgbs))
+    rgbs = np.stack(rgbs, axis=0) # S,H,W,3
+    rgbs = rgbs[:,:,:,::-1].copy() # BGR->RGB
+    rgbs = rgbs[::timestride]
+    S_here,H,W,C = rgbs.shape
+    print('rgbs', rgbs.shape)
+
+    # Compute ground truth visualisations
+    if save_vis:
+        sw_t = utils.improc.Summ_writer(
+            writer=gt_writer_t,
+            global_step=0,
+            log_freq=log_freq,
+            fps=6,
+            scalar_freq=int(log_freq/2),
+            just_gif=True
+        )
+        visualise_track_ground_truths(image_size, rgbs, track_path, sw_t, sample_idx)
+
+    # Compute P.O. model error and visualisations
+    po_avg_error, po_track_avg_errors = visualise_track_predictions(
+        model_name, image_size, rgbs, track_path,
+        "/home/deepthought/Ahmad/pips2/reference_model",
+        S_here, S, iters, max_iters, po_writer_t,
+        log_freq, N, sample_idx, save_vis, "po"
+    )
+
+    # Computer EPIC model error and visualistions
+    epic_avg_error, epic_track_avg_errors = visualise_track_predictions(
+        model_name, image_size, rgbs, track_path,
+        "/home/deepthought/Ahmad/pips2/reference_model_epic",
+        S_here, S, iters, max_iters, epic_writer_t,
+        log_freq, N, sample_idx, save_vis, "epic"
+    )
+    return po_avg_error, po_track_avg_errors, epic_avg_error, epic_track_avg_errors
 
 
 def main(
     sample_idx="000000",
-    vis_track_type="gt",
+    save_vis=False,
+    aggregate_all=False,
     S=48,
     N=1024,
     stride=8,
@@ -197,56 +253,80 @@ def main(
     shuffle=False, # dataset shuffling
     log_freq=1, # how often to make image summaries
     log_dir='./logs_demo',
-    init_dir='/home/deepthought/Ahmad/pips2/reference_model',
     device_ids=[0],
 ):
-    print(f"Model Pathway: {init_dir}")
-    track_dir = f"/media/deepthought/DATA/Ahmad/pointodyssey/epic/ae_24_96_384x512/{sample_idx}"
-    filename = f"{track_dir}/rgb.mp4"
     exp_name = 'de00' # copy from dev repo
 
-    print('filename', filename)
-    name = Path(filename).stem
-    print('name', name)
+    if aggregate_all:
+        num_vids_better, total_vids = 0, 0
+        num_tracks_better, total_tracks = 0, 0
+        #for i in range(0, 100):
+        counter, sample_num = 0, 0
+        hundred_vids = False
+        while not hundred_vids:
+            sample_idx = str(sample_num).zfill(6)
+            track_dir = f"/media/deepthought/DATA/Ahmad/pointodyssey/epic/ae_24_96_384x512/{sample_idx}"
+            filename = f"{track_dir}/rgb.mp4"
+            if not os.path.exists(filename):
+                print("Path does not exist, skipping...")
+                sample_num += 1
+                continue
 
-    rgbs = read_mp4(filename)
-    print(len(rgbs))
-    rgbs = np.stack(rgbs, axis=0) # S,H,W,3
-    rgbs = rgbs[:,:,:,::-1].copy() # BGR->RGB
-    rgbs = rgbs[::timestride]
-    S_here,H,W,C = rgbs.shape
-    print('rgbs', rgbs.shape)
-    
-    # autogen a name
-    model_name = "%s_%d_%d_%s" % (name, S, N, exp_name)
-    import datetime
-    model_date = datetime.datetime.now().strftime('%H:%M:%S')
-    model_name = model_name + '_' + model_date
-    print('model_name', model_name)
+            print('filename', filename)
+            name = Path(filename).stem
+            print('name', name)
 
-    log_dir = 'logs_demo'
+            # autogen a name
+            model_name = "%s_%s_%d_%d_%s" % (sample_idx, name, S, N, exp_name)
+            import datetime
+            model_date = datetime.datetime.now().strftime('%H:%M:%S')
+            model_name = model_name + '_' + model_date
+            print('model_name', model_name)
 
-    writer_t = SummaryWriter(log_dir + '/' + model_name + '/t', max_queue=10, flush_secs=60)
+            track_path = f"{track_dir}/track.npz"
 
-    track_path = f"{track_dir}/track.npz"
+            po_avg_error, po_track_avg_errors, epic_avg_error, epic_track_avg_errors = compare_gt_po_epic(
+                filename, track_path, sample_idx,save_vis, model_name, image_size,
+                S, iters, max_iters, log_freq, N, "logs_demo", timestride
+            )
+            # Count videos better on EPIC model
+            total_vids += 1
+            counter += 1
+            sample_num += 1
+            if epic_avg_error < po_avg_error:
+                num_vids_better += 1
 
-    if vis_track_type == "gt":
-        sw_t = utils.improc.Summ_writer(
-            writer=writer_t,
-            global_step=0,
-            log_freq=log_freq,
-            fps=6,
-            scalar_freq=int(log_freq/2),
-            just_gif=True
-        )
-        visualise_track_ground_truths(image_size, rgbs, track_path, sw_t)
-    elif vis_track_type == "pred":
-        visualise_track_predictions(
-            model_name, image_size, rgbs, track_path, init_dir,
-            S_here, S, iters, max_iters, writer_t, log_freq, N
-        )
+            # Count tracks better on EPIC model
+            num_tracks_better += torch.sum((epic_track_avg_errors < po_track_avg_errors).int(), dim=0).item()
+            total_tracks += po_track_avg_errors.size(0)
+
+            if counter == 100:
+                hundred_vids = True
+        print(f"Percentage of Videos Better on EPIC -> {(num_vids_better/total_vids)*100.0}% ({num_vids_better}/{total_vids})")
+        print(f"Percentage of Tracks Better on EPIC -> {(num_tracks_better/total_tracks)*100.0}% ({num_tracks_better}/{total_tracks})")
     else:
-        print("Invalid vis_track_type value!")
+        track_dir = f"/media/deepthought/DATA/Ahmad/pointodyssey/epic/ae_24_96_384x512/{sample_idx}"
+        filename = f"{track_dir}/rgb.mp4"
+
+        print('filename', filename)
+        name = Path(filename).stem
+        print('name', name)
+
+        # autogen a name
+        model_name = "%s_%s_%d_%d_%s" % (sample_idx, name, S, N, exp_name)
+        import datetime
+        model_date = datetime.datetime.now().strftime('%H:%M:%S')
+        model_name = model_name + '_' + model_date
+        print('model_name', model_name)
+
+        track_path = f"{track_dir}/track.npz"
+
+        po_avg_error, po_track_avg_errors, epic_avg_error, epic_track_avg_errors = compare_gt_po_epic(
+            filename, track_path, sample_idx,save_vis, model_name, image_size,
+            S, iters, max_iters, log_freq, N, "logs_demo", timestride
+        )
+        print(f"P.O. Avg. Error = {po_avg_error}, EPIC Avg. Error = {epic_avg_error}")
+        print(f"Number of Tracks Better on EPIC -> {torch.sum((epic_track_avg_errors < po_track_avg_errors).int(), dim=0)}/{po_track_avg_errors.size(0)}")
     
     print("DONE!")
     
@@ -257,14 +337,21 @@ if __name__ == '__main__':
         help="6 digit code for folder containing rgb.mp4 and track.npz files."
     )
     parser.add_argument(
-        "--vis_track_type", action="store", dest="vis_track_type", default="gt", choices=["gt", "pred"],
-        help="Choice to visualise ground truth or prediction tracks."
+        "--save_vis", action="store_true", dest="save_vis",
+        help="True=Save visualisation, False=Skip visualisation creation and save."
     )
     parser.add_argument(
-        "--model_type", action="store", dest="model_type", default="po", choices=["po","epic"],
-        help="'po'=Original model trained on Point Odyssey, 'epic'=P.O. and then fine-tuned on synthetic EPIC."
+        "--aggregate_all", action="store_true", dest="aggregate_all",
+        help="True=Ignore sample_idx and compute % better for 100 train/val, False=Compute difference of errors for one video"
     )
+    parser.set_defaults(save_vis=False)
+    parser.set_defaults(aggregate_all=False)
     args = parser.parse_args()
+    print(f"save_vis={args.save_vis}")
+    print(f"aggregate_all={args.aggregate_all}")
 
-    model_dir = f"/home/deepthought/Ahmad/pips2/{'reference_model_epic' if args.model_type == 'epic' else 'reference_model'}"
-    Fire(main(sample_idx=args.sample_idx, vis_track_type=args.vis_track_type, init_dir=model_dir))
+    Fire(main(
+        sample_idx=args.sample_idx,
+        save_vis=args.save_vis,
+        aggregate_all=args.aggregate_all
+    ))
