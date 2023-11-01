@@ -243,19 +243,19 @@ def compare_gt_po_epic(
     return po_avg_error, po_track_avg_errors, epic_avg_error, epic_track_avg_errors
 
 
-def plot_error_diff(vids_diffs, tracks_diffs, split):
+def plot_error_diff(vids_diffs, tracks_diffs, split, flip_negatives=False):
     new_min_vids = -(math.floor(abs(min(vids_diffs))/0.5) * 0.5)
     new_max_vids = math.floor(abs(max(vids_diffs))/0.5) * 0.5
 
-    new_min_tracks = -(math.floor(abs(min(tracks_diffs))/5.0) * 5.0)
-    new_max_tracks = math.floor(abs(max(tracks_diffs))/5.0) * 5.0
+    new_min_tracks = -(math.floor(abs(min(tracks_diffs))/1.0) * 1.0)
+    new_max_tracks = math.floor(abs(max(tracks_diffs))/1.0) * 1.0
 
     vids_bins = np.concatenate([np.array([min(vids_diffs)]), np.arange(new_min_vids, 0, 0.5), np.arange(0, new_max_vids, 0.5), np.array([max(vids_diffs)])])
-    tracks_bins = np.concatenate([np.array([min(tracks_diffs)]), np.arange(new_min_tracks, 0, 5.0), np.arange(0, new_max_tracks, 5.0), np.array([max(tracks_diffs)])])
+    tracks_bins = np.concatenate([np.array([min(tracks_diffs)]), np.arange(new_min_tracks, 0, 1.0), np.arange(0, new_max_tracks, 1.0), np.array([max(tracks_diffs)])])
     vids_hist, vids_bin_edges = np.histogram(vids_diffs, bins=vids_bins)
     tracks_hist, tracks_bin_edges = np.histogram(tracks_diffs, bins=tracks_bins)
     fig, axs = plt.subplots(2, 1, figsize=(10, 6))
-    fig.suptitle(f"Difference in Error Between {'Val.' if on_val else 'Train'} Samples on P.O. & EPIC")
+    fig.suptitle(f"Difference in Error Between {split} Samples on P.O. & EPIC")
 
     # Plot bars with positive or negative heights based on bin values
     for i in range(len(vids_hist)):
@@ -266,12 +266,8 @@ def plot_error_diff(vids_diffs, tracks_diffs, split):
         else:
             width = 0.5
         if vids_bin_edges[i] < 0:
-            print(vids_bin_edges[i], -vids_hist[i])
-            axs[0].bar(vids_bin_edges[i], -vids_hist[i], width=width, color='red', align='edge')
+            axs[0].bar(vids_bin_edges[i], -vids_hist[i] if flip_negatives else vids_hist[i], width=width, color='red', align='edge')
         else:
-            if vids_bin_edges[i] == 0:
-                print(vids_bin_edges[i])
-                print(vids_hist[i])
             axs[0].bar(vids_bin_edges[i], vids_hist[i], width=width, color='blue', align='edge')
 
     for i in range(len(tracks_hist)):
@@ -280,14 +276,17 @@ def plot_error_diff(vids_diffs, tracks_diffs, split):
         elif i == len(vids_hist)-1:
             width = round(abs(max(tracks_diffs)) - abs(new_max_tracks), 2)
         else:
-            width = 5.0
+            width = 1.0
         if tracks_bin_edges[i] < 0:
-            axs[1].bar(tracks_bin_edges[i], -tracks_hist[i], width=width, color='red', align='edge')
+            axs[1].bar(tracks_bin_edges[i], -tracks_hist[i] if flip_negatives else tracks_hist[i], width=width, color='red', align='edge')
         else:
             axs[1].bar(tracks_bin_edges[i], tracks_hist[i], width=width, color='blue', align='edge')
 
     axs[0].set_title("Videos")
+    axs[0].set_xlabel("L2 Difference")
     axs[1].set_title("Tracks")
+    axs[1].set_xlabel("L2 Difference")
+    axs[1].set_xlim([-10.0, 10.0])
     fig.tight_layout()
     fig.savefig(f"{split}_samples_error_diff_hists.png")
 
