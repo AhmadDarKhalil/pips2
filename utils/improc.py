@@ -1001,7 +1001,7 @@ class Summ_writer(object):
         return self.summ_rgbs(name, rgbs, only_return=only_return, frame_ids=frame_ids)
     
     
-    def summ_traj2ds_on_rgbs(self, name, trajs, rgbs, valids=None, frame_ids=None, only_return=False, show_dots=False, cmap='coolwarm', vals=None, linewidth=1):
+    def summ_traj2ds_on_rgbs(self, name, trajs, rgbs, valids=None, frame_ids=None, only_return=False, show_dots=False, cmap='coolwarm', vals=None, linewidth=1, two_colour_map=None):
         # trajs is B, S, N, 2
         # rgbs is B, S, C, H, W
         B, S, C, H, W = rgbs.shape
@@ -1074,7 +1074,11 @@ class Summ_writer(object):
             # vis = visibles[:,i] # S
             vis = torch.ones_like(traj[:,0]) # S
             valid = valids[:,i] # S
-            rgbs_color = self.draw_circ_on_images_py(rgbs_color, traj, vis, S=0, show_dots=show_dots, cmap=cmap_, linewidth=linewidth)
+            if two_colour_map is not None:
+                change_col = 1 if two_colour_map[i] > 0 else None
+            else:
+                change_col = None
+            rgbs_color = self.draw_circ_on_images_py(rgbs_color, traj, vis, S=0, show_dots=show_dots, cmap=cmap_, linewidth=linewidth, change_col=change_col)
 
         rgbs = []
         for rgb in rgbs_color:
@@ -1305,7 +1309,7 @@ class Summ_writer(object):
             # cv2.circle(rgbs[s], (traj[s,0], traj[s,1]), linewidth+1, vis_color, -1)
         return rgb
     
-    def draw_circ_on_images_py(self, rgbs, traj, vis, S=50, linewidth=1, show_dots=False, cmap=None, maxdist=None):
+    def draw_circ_on_images_py(self, rgbs, traj, vis, S=50, linewidth=1, show_dots=False, cmap=None, maxdist=None, change_col=None):
         # all inputs are numpy tensors
         # rgbs is a list of 3,H,W
         # traj is S,2
@@ -1337,7 +1341,8 @@ class Summ_writer(object):
                 # color = (color[0], color[1], color[2])
                 # print('color', color)
             # import ipdb; ipdb.set_trace()
-                
+            if change_col is not None:
+                color = np.array([255., 0., 0.])
             cv2.circle(rgbs[s], (int(traj[s,0]), int(traj[s,1])), linewidth+1, color, -1)
             # vis_color = int(np.squeeze(vis[s])*255)
             # vis_color = (vis_color,vis_color,vis_color)

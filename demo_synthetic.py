@@ -36,12 +36,66 @@ def load_synthetic_tracks(path):
     return points[:, :, :2], points[:, :, 3]
 
 
+def annotate_model_comparison(
+    po_rgbs, po_window_points, epic_rgbs, epic_window_points, writer_t,
+    log_freq, sample_idx_name, two_colour_map=None, gt_window_points=None
+):
+    sw = utils.improc.Summ_writer(
+        writer=writer_t,
+        global_step=0,
+        log_freq=log_freq,
+        fps=6,
+        scalar_freq=int(log_freq/2),
+        just_gif=True
+    )
+    linewidth = 2
+    out_fn = f"./synthetic_outputs/BETTER_TRACKS_10_po_v_epic_synthetic_{sample_idx_name}{'' if two_colour_map is None else '_with_CC'}.mp4"
+    video_res = (1536,384) if gt_window_points is not None else (1024,384)
+    video_writer = cv2.VideoWriter(out_fn, cv2.VideoWriter_fourcc(*'MP4V'), 12.0, video_res)
+
+    for window_idx, (po_frame_points, epic_frame_points) in enumerate(zip(po_window_points, epic_window_points)):
+        print(f"Annotating window: {window_idx+1}")
+        o_gt = torch.tensor([])
+        if gt_window_points is not None:
+            # Visualise the tracks overload on the rgbs for GT
+            o_gt = sw.summ_traj2ds_on_rgbs(
+                'outputs/gt_trajs_on_rgbs', gt_window_points[window_idx][0:1],
+                utils.improc.preprocess_color(po_rgbs[window_idx][0:1]),
+                cmap='spring', linewidth=linewidth,
+                two_colour_map=None
+            )
+        # Visualise the tracks overlaid on the rgbs for PO
+        o1 = sw.summ_traj2ds_on_rgbs(
+            'outputs/po_trajs_on_rgbs', po_frame_points[0:1],
+            utils.improc.preprocess_color(po_rgbs[window_idx][0:1]),
+            cmap='spring', linewidth=linewidth,
+            two_colour_map=two_colour_map
+        )
+        # Visualise the tracks overload on the rgbs for EPIC
+        o2 = sw.summ_traj2ds_on_rgbs(
+            'outputs/epic_trajs_on_rgbs', epic_frame_points[0:1],
+            utils.improc.preprocess_color(epic_rgbs[window_idx][0:1]),
+            cmap='spring', linewidth=linewidth,
+            two_colour_map=two_colour_map
+        )
+        # Concat views
+        wide_cat = torch.cat([o_gt, o1, o2], dim=-1)
+        sw.summ_rgbs('outputs/model_comp_wide_cat', wide_cat.unbind(1))
+
+        # write to disk, in case that's more convenient
+        wide_list = list(wide_cat.unbind(1))
+        for wide in wide_list:
+            video_writer.write(cv2.cvtColor(wide[0].permute(1,2,0).cpu().numpy(), cv2.COLOR_RGB2BGR))
+    video_writer.release()
+    print(f"Saved model comparison {out_fn}.")
+
+
 def annotate_video_with_dots(rgbs, window_points, sw, sample_idx_name, file_prefix="GROUND_TRUTH", valids=None):
     linewidth = 2
     print(f"Number of windows = {len(window_points)}")
-    out_fn = f"./synthetic_outputs/TEST_{file_prefix}_synthetic_{sample_idx_name}.mp4"
+    out_fn = f"./synthetic_outputs/{file_prefix}_synthetic_{sample_idx_name}.mp4"
     video_writer = cv2.VideoWriter(out_fn, cv2.VideoWriter_fourcc(*'MP4V'), 12.0, (1536,384))
-    for window_idx, frame_points in  enumerate(window_points):
+    for window_idx, frame_points in enumerate(window_points):
         print(f"Annotating window: {window_idx+1}")
         # visualize the input
         o1 = sw.summ_rgbs('inputs/rgbs', utils.improc.preprocess_color(rgbs[window_idx][0:1]).unbind(1))
@@ -82,7 +136,7 @@ def visualise_track_ground_truths(image_size, rgbs, track_path, sw_t, sample_idx
 def visualise_track_predictions(
     model_name, image_size, rgbs, track_path, init_dir,
     S_here, S, iters, max_iters, writer_t, log_freq, N,
-    sample_idx_name, save_vis, model_type
+    sample_idx_name, save_vis, model_type, cc_error=False
 ):
     global_step = 0
 
@@ -122,6 +176,9 @@ def visualise_track_predictions(
 
         with torch.no_grad():
             trajs_e = run_model(model, rgb_seq, pass_on_trajs, S_max=S, N=N, iters=iters, sw=sw_t)
+            if cc_error:
+                track_cc_error, trajs_e_forward, trajs_e_backward = calculate_cc_error(model, rgb_seq, pass_on_trajs, S_max=S, N=N, iters=iters, sw=sw_t)
+                print("TODO")
             print(trajs_e.shape)
         iter_time = time.time()-iter_start_time
         print('%s; step %06d/%d; itime %.2f' % (
@@ -133,11 +190,19 @@ def visualise_track_predictions(
         pass_on_trajs = trajs_e[0, -1, :, :].repeat(1, S, 1, 1)
         window_points.append(trajs_e.detach().cpu())
 
-    if save_vis:
-        annotate_video_with_dots(rgb_seq_full, window_points, sw_t, sample_idx_name, file_prefix=f"{model_type}_PREDS")
-
     avg_error, error_matrix = calculate_ground_truth_error(gt_tracks, window_points)
-    return avg_error, torch.mean(error_matrix, dim=0)
+    return_obj = {
+        "global_l2_error": avg_error,
+        "track_l2_error": torch.mean(error_matrix, dim=0)
+    }
+    if cc_error:
+        return_obj["cc_error"] = track_cc_error
+        return_obj["cc_forward"] = trajs_e_forward
+        return_obj["cc_backward"] = trajs_e_backward
+    if save_vis:
+        return_obj["trajs"] = window_points
+        return_obj["rgb_seq_full"] = rgb_seq_full
+    return return_obj
 
 
 def calculate_ground_truth_error(gt_tracks, window_points):
@@ -195,9 +260,31 @@ def run_model(model, rgbs, init_trajs, S_max=128, N=64, iters=16, sw=None):
     return trajs_e
 
 
+def calculate_cc_error(model, rgbs, init_trajs, S_max=128, N=64, iters=16, sw=None):
+    rgbs = rgbs.cuda().float() # B, S, C, H, W
+
+    B, S, C, H, W = rgbs.shape
+    assert(B == 1)
+    trajs_e_forward = init_trajs 
+    iter_start_time = time.time()
+
+    # Forward tracking
+    preds_forward, _, _, _ = model(trajs_e_forward, rgbs, iters=iters, feat_init=None, beautify=True)
+    trajs_e_forward = preds_forward[-1]
+
+    # Reverse the iteration direction and use the final poses to track points backward
+    preds_backward, _, _, _ = model(trajs_e_forward.flip(1), rgbs.flip(1), iters=iters, feat_init=None, beautify=True)
+    trajs_e_backward = preds_backward[-1].flip(1)
+
+    iter_time = time.time()-iter_start_time
+    
+    dist = compute_pairwise_distances(trajs_e_forward, trajs_e_backward)
+    return dist, trajs_e_forward.unsqueeze(0), trajs_e_backward.unsqueeze(0)
+ 
+
 def compare_gt_po_epic(
-    video_path, track_path, sample_idx, save_vis, model_name,
-    image_size, S, iters, max_iters, log_freq, N, log_dir, timestride
+    video_path, track_path, sample_idx, save_vis, save_model_diff_vis, model_name,
+    image_size, S, iters, max_iters, log_freq, N, log_dir, timestride, cc_error
 ):
     # Create log writer for GT, PO and EPIC
     gt_writer_t = SummaryWriter(f"{log_dir}/{model_name}/gt/t", max_queue=10, flush_secs=60)
@@ -213,8 +300,27 @@ def compare_gt_po_epic(
     S_here,H,W,C = rgbs.shape
     print('rgbs', rgbs.shape)
 
-    # Compute ground truth visualisations
+    # Compute P.O. model error and visualisations
+    po_error_obj = visualise_track_predictions(
+        model_name, image_size, rgbs, track_path,
+        "/home/deepthought/Ahmad/pips2/reference_model",
+        S_here, S, iters, max_iters, po_writer_t,
+        log_freq, N, sample_idx,
+        True if save_vis or save_model_diff_vis else False,
+        "po", cc_error
+    )
+    # Computer EPIC model error and visualistions
+    epic_error_obj = visualise_track_predictions(
+        model_name, image_size, rgbs, track_path,
+        "/home/deepthought/Ahmad/pips2/reference_model_epic",
+        S_here, S, iters, max_iters, epic_writer_t,
+        log_freq, N, sample_idx,
+        True if save_vis or save_model_diff_vis else False,
+        "epic", cc_error
+    )
+
     if save_vis:
+        # Only compute ground truth if individual visualisations needed
         sw_t = utils.improc.Summ_writer(
             writer=gt_writer_t,
             global_step=0,
@@ -224,23 +330,26 @@ def compare_gt_po_epic(
             just_gif=True
         )
         visualise_track_ground_truths(image_size, rgbs, track_path, sw_t, sample_idx)
+        po_sw_t = utils.improc.Summ_writer(
+            writer=po_writer_t,
+            global_step=0,
+            log_freq=log_freq,
+            fps=6,
+            scalar_freq=int(log_freq/2),
+            just_gif=True
+        )
+        annotate_video_with_dots(po_error_obj['rgb_seq_full'], po_error_obj['trajs'], po_sw_t, sample_idx_name, file_prefix=f"po_PREDS")
+        epic_sw_t = utils.improc.Summ_writer(
+            writer=epic_writer_t,
+            global_step=0,
+            log_freq=log_freq,
+            fps=6,
+            scalar_freq=int(log_freq/2),
+            just_gif=True
+        )
+        annotate_video_with_dots(epic_error_obj['rgb_seq_full'], epic_error_obj['trajs'], epic_sw_t, sample_idx_name, file_prefix=f"epic_PREDS")
 
-    # Compute P.O. model error and visualisations
-    po_avg_error, po_track_avg_errors = visualise_track_predictions(
-        model_name, image_size, rgbs, track_path,
-        "/home/deepthought/Ahmad/pips2/reference_model",
-        S_here, S, iters, max_iters, po_writer_t,
-        log_freq, N, sample_idx, save_vis, "po"
-    )
-
-    # Computer EPIC model error and visualistions
-    epic_avg_error, epic_track_avg_errors = visualise_track_predictions(
-        model_name, image_size, rgbs, track_path,
-        "/home/deepthought/Ahmad/pips2/reference_model_epic",
-        S_here, S, iters, max_iters, epic_writer_t,
-        log_freq, N, sample_idx, save_vis, "epic"
-    )
-    return po_avg_error, po_track_avg_errors, epic_avg_error, epic_track_avg_errors
+    return po_error_obj, epic_error_obj
 
 
 def plot_error_diff(vids_diffs, tracks_diffs, split, flip_negatives=False):
@@ -294,9 +403,11 @@ def plot_error_diff(vids_diffs, tracks_diffs, split, flip_negatives=False):
 def main(
     sample_idx="000000",
     save_vis=False,
+    save_model_diff_vis=False,
     aggregate_all=False,
     on_val=False,
     plot_hists=False,
+    cc_error=False,
     S=48,
     N=1024,
     stride=8,
@@ -320,6 +431,7 @@ def main(
         vids_diffs = []
         num_tracks_better, total_tracks = 0, 0
         tracks_diffs = []
+        num_cc_vids_worse, total_cc_vids = 0, 0
         #for i in range(0, 100):
         counter, sample_num = 0, 0
         hundred_vids = False
@@ -345,10 +457,15 @@ def main(
 
             track_path = f"{track_dir}/track.npz"
 
-            po_avg_error, po_track_avg_errors, epic_avg_error, epic_track_avg_errors = compare_gt_po_epic(
-                filename, track_path, sample_idx,save_vis, model_name, image_size,
-                S, iters, max_iters, log_freq, N, "logs_demo", timestride
+            po_error_obj, epic_error_obj = compare_gt_po_epic(
+                filename, track_path, sample_idx, save_vis, save_model_diff_vis, model_name, image_size,
+                S, iters, max_iters, log_freq, N, "logs_demo", timestride, cc_error
             )
+            po_avg_error = po_error_obj["global_l2_error"]
+            po_track_avg_errors = po_error_obj["track_l2_error"]
+            epic_avg_error = epic_error_obj["global_l2_error"]
+            epic_track_avg_errors = epic_error_obj["track_l2_error"]
+
             # Count videos better on EPIC model
             total_vids += 1
             counter += 1
@@ -356,9 +473,54 @@ def main(
             vids_diffs.append(po_avg_error - epic_avg_error)
             if epic_avg_error < po_avg_error:
                 num_vids_better += 1
+                total_cc_vids += 1
+                if cc_error:
+                    num_cc_vids_worse += 1 if epic_error_obj["cc_error"].mean().item() > po_error_obj["cc_error"].mean().item() else 0
 
             # Count tracks better on EPIC model
             num_tracks_better += torch.sum((epic_track_avg_errors < po_track_avg_errors).int(), dim=0).item()
+
+            if save_model_diff_vis:
+                model_comp_writer = epic_writer_t = SummaryWriter(f"{log_dir}/{model_name}/epic_v_po/t", max_queue=10, flush_secs=60)
+                threshold = 10.0
+                # Pick the best three points
+                show_points = 3
+                # ####
+                diff_bool_idx = ((po_track_avg_errors - epic_track_avg_errors) > threshold)
+                temp_num_tracks_better = torch.sum(diff_bool_idx.int(), dim=0).item()
+                print(f"@@@ Sample ID={sample_idx} -> Number of Tracks Better on EPIC by {threshold} = {temp_num_tracks_better}")
+                if temp_num_tracks_better > 0:
+                    if cc_error:
+                        # TODO - Enable this for multiple windows
+                        chosen_po_trajs = [torch.cat([
+                            po_error_obj["cc_forward"][0][:, :, diff_bool_idx, :],
+                            po_error_obj["cc_backward"][0][:, :, diff_bool_idx, :]
+                        ], dim=2)]
+                        chosen_epic_trajs = [torch.cat([
+                            epic_error_obj["cc_forward"][0][:, :, diff_bool_idx, :],
+                            epic_error_obj["cc_backward"][0][:, :, diff_bool_idx, :]
+                        ], dim=2)]
+                        two_colour_map = np.concatenate([np.zeros(temp_num_tracks_better), np.ones(temp_num_tracks_better)])
+                    else:
+                        chosen_po_trajs = [window_trajs[:, :, diff_bool_idx, :] for window_trajs in po_error_obj['trajs']]
+                        chosen_epic_trajs = [window_trajs[:, :, diff_bool_idx, :] for window_trajs in epic_error_obj['trajs']]
+                        two_colour_map = None
+
+                    gt_tracks, _ = load_synthetic_tracks(track_path)
+                    annotate_model_comparison(
+                        po_error_obj['rgb_seq_full'],
+                        chosen_po_trajs,
+                        epic_error_obj['rgb_seq_full'],
+                        chosen_epic_trajs,
+                        model_comp_writer,
+                        log_freq,
+                        sample_idx,
+                        two_colour_map=two_colour_map,
+                        # TODO - Enable this for multiple windows
+                        gt_window_points=[torch.from_numpy(gt_tracks)[:, diff_bool_idx, :].unsqueeze(0)]
+                    )
+            if counter == 10:
+                sys.exit(0)
             total_tracks += po_track_avg_errors.size(0)
             temp_diffs = po_track_avg_errors - epic_track_avg_errors
             tracks_diffs.extend(list(temp_diffs.numpy()))
@@ -367,6 +529,8 @@ def main(
                 hundred_vids = True
         print(f"Percentage of Videos Better on EPIC -> {(num_vids_better/total_vids)*100.0}% ({num_vids_better}/{total_vids})")
         print(f"Percentage of Tracks Better on EPIC -> {(num_tracks_better/total_tracks)*100.0}% ({num_tracks_better}/{total_tracks})")
+        if cc_error:
+            print(f"Videos which are better on EPIC = {total_cc_vids}, Number of Which are Worse for CC Measure = {num_cc_vids_worse}")
         # Create histograms of difference in better vids/tracks
         if plot_hists:
             plot_error_diff(
@@ -391,12 +555,12 @@ def main(
 
         track_path = f"{track_dir}/track.npz"
 
-        po_avg_error, po_track_avg_errors, epic_avg_error, epic_track_avg_errors = compare_gt_po_epic(
-            filename, track_path, sample_idx,save_vis, model_name, image_size,
+        po_error_obj, epic_error_obj = compare_gt_po_epic(
+            filename, track_path, sample_idx, save_vis, save_model_diff_vis, model_name, image_size,
             S, iters, max_iters, log_freq, N, "logs_demo", timestride
         )
-        print(f"P.O. Avg. Error = {po_avg_error}, EPIC Avg. Error = {epic_avg_error}")
-        print(f"Number of Tracks Better on EPIC -> {torch.sum((epic_track_avg_errors < po_track_avg_errors).int(), dim=0)}/{po_track_avg_errors.size(0)}")
+        print(f"P.O. Avg. Error = {po_error_obj['global_l2_error']}, EPIC Avg. Error = {epic_error_obj['global_l2_error']}")
+        print(f"Number of Tracks Better on EPIC -> {torch.sum((epic_error_obj['track_l2_error'] < po_error_obj['track_l2_error']).int(), dim=0)}/{po_error_obj['track_l2_error'].size(0)}")
     
     print("DONE!")
     
@@ -408,7 +572,11 @@ if __name__ == '__main__':
     )
     parser.add_argument(
         "--save_vis", action="store_true", dest="save_vis",
-        help="True=Save visualisation, False=Skip visualisation creation and save."
+        help="True=Save separate visualisations of each model, False=Skip visualisation creation and save."
+    )
+    parser.add_argument(
+        "--save_model_diff_vis", action="store_true", dest="save_model_diff_vis",
+        help="True=Save visualisations of tracks better on EPIC, False=Do not save"
     )
     parser.add_argument(
         "--aggregate_all", action="store_true", dest="aggregate_all",
@@ -421,20 +589,27 @@ if __name__ == '__main__':
     parser.add_argument(
         "--plot_hists", action="store_true", dest="plot_hists"
     )
+    parser.add_argument("--cc_error", action="store_true", dest="cc_error")
     parser.set_defaults(save_vis=False)
+    parser.set_defaults(save_model_diff_vis=False)
     parser.set_defaults(aggregate_all=False)
     parser.set_defaults(on_val=False)
     parser.set_defaults(plot_hists=False)
+    parser.set_defaults(cc_error=False)
     args = parser.parse_args()
     print(f"save_vis={args.save_vis}")
+    print(f"save_model_diff_vis={args.save_model_diff_vis}")
     print(f"aggregate_all={args.aggregate_all}")
     print(f"on_val={args.on_val}")
     print(f"plot_hists={args.plot_hists}")
+    print(f"cc_error={args.cc_error}")
 
     Fire(main(
         sample_idx=args.sample_idx,
         save_vis=args.save_vis,
+        save_model_diff_vis=args.save_model_diff_vis,
         aggregate_all=args.aggregate_all,
         on_val=args.on_val,
-        plot_hists=args.plot_hists
+        plot_hists=args.plot_hists,
+        cc_error=args.cc_error
     ))
