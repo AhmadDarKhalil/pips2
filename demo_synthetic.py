@@ -273,7 +273,10 @@ def calculate_cc_error(model, rgbs, init_trajs, S_max=128, N=64, iters=16, sw=No
     trajs_e_forward = preds_forward[-1]
 
     # Reverse the iteration direction and use the final poses to track points backward
-    preds_backward, _, _, _ = model(trajs_e_forward.flip(1), rgbs.flip(1), iters=iters, feat_init=None, beautify=True)
+    xy0_back = trajs_e_forward[0:1,-1,:,:]
+    xy0_back = xy0_back.unsqueeze(1).repeat(1, S, 1, 1)
+    #preds_backward, _, _, _ = model(trajs_e_forward.flip(1), rgbs.flip(1), iters=iters, feat_init=None, beautify=True)
+    preds_backward, _, _, _ = model(xy0_back, rgbs.flip(1), iters=iters, feat_init=None, beautify=True)
     trajs_e_backward = preds_backward[-1].flip(1)
 
     iter_time = time.time()-iter_start_time
@@ -501,24 +504,32 @@ def main(
                             epic_error_obj["cc_backward"][0][:, :, diff_bool_idx, :]
                         ], dim=2)]
                         two_colour_map = np.concatenate([np.zeros(temp_num_tracks_better), np.ones(temp_num_tracks_better)])
+                        print(po_error_obj["cc_error"][:, diff_bool_idx].size())
+                        print(po_error_obj["cc_error"][:, diff_bool_idx].mean(0))
+                        print(epic_error_obj["cc_error"][:, diff_bool_idx].size())
+                        print(epic_error_obj["cc_error"][:, diff_bool_idx].mean(0))
+                        print("COORDS:")
+                        print(po_error_obj["cc_forward"][0][:, 0, diff_bool_idx, :])
+                        print(epic_error_obj["cc_forward"][0][:, 0, diff_bool_idx, :])
                     else:
                         chosen_po_trajs = [window_trajs[:, :, diff_bool_idx, :] for window_trajs in po_error_obj['trajs']]
                         chosen_epic_trajs = [window_trajs[:, :, diff_bool_idx, :] for window_trajs in epic_error_obj['trajs']]
                         two_colour_map = None
 
-                    gt_tracks, _ = load_synthetic_tracks(track_path)
-                    annotate_model_comparison(
-                        po_error_obj['rgb_seq_full'],
-                        chosen_po_trajs,
-                        epic_error_obj['rgb_seq_full'],
-                        chosen_epic_trajs,
-                        model_comp_writer,
-                        log_freq,
-                        sample_idx,
-                        two_colour_map=two_colour_map,
-                        # TODO - Enable this for multiple windows
-                        gt_window_points=[torch.from_numpy(gt_tracks)[:, diff_bool_idx, :].unsqueeze(0)]
-                    )
+                    
+                    #gt_tracks, _ = load_synthetic_tracks(track_path)
+                    #annotate_model_comparison(
+                    #    po_error_obj['rgb_seq_full'],
+                    #    chosen_po_trajs,
+                    #    epic_error_obj['rgb_seq_full'],
+                    #    chosen_epic_trajs,
+                    #    model_comp_writer,
+                    #    log_freq,
+                    #    sample_idx,
+                    #    two_colour_map=two_colour_map,
+                    #    # TODO - Enable this for multiple windows
+                    #    gt_window_points=[torch.from_numpy(gt_tracks)[:, diff_bool_idx, :].unsqueeze(0)]
+                    #)
             if counter == 10:
                 sys.exit(0)
             total_tracks += po_track_avg_errors.size(0)

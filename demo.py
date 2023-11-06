@@ -69,7 +69,10 @@ def run_model_forward_backward(model, rgbs, S_max=128, N=64, iters=16, sw=None, 
     trajs_e_forward = preds_forward[-1]
 
     # Reverse the iteration direction and use the final poses to track points backward
-    preds_backward, _, _, _ = model(trajs_e_forward.flip(1), rgbs.flip(1), iters=iters, feat_init=None, beautify=True)
+    xy0_back = trajs_e_forward[0:1,-1,:,:]
+    xy0_back = xy0_back.unsqueeze(1).repeat(1, S, 1, 1)
+    #preds_backward, _, _, _ = model(trajs_e_forward.flip(1), rgbs.flip(1), iters=iters, feat_init=None, beautify=True)
+    preds_backward, _, _, _ = model(xy0_back, rgbs.flip(1), iters=iters, feat_init=None, beautify=True)
     trajs_e_backward = preds_backward[-1].flip(1)
 
     iter_time = time.time()-iter_start_time
@@ -80,9 +83,9 @@ def run_model_forward_backward(model, rgbs, S_max=128, N=64, iters=16, sw=None, 
     print('average distence: ', dist.mean())
     print(f"Keep Good Points = {keep_good_points}")
     if keep_good_points:
-        keep_point = m < dist.mean()
+        keep_point = m < 4.0
     else:
-        keep_point = m > dist.mean()
+        keep_point = m > 4.0
     #keep_point = m < 2 #dist.mean() # keep the point if it's less the average
     
     
@@ -123,7 +126,7 @@ def run_model_forward_backward(model, rgbs, S_max=128, N=64, iters=16, sw=None, 
 def annotate_video_with_dots(rgbs, window_points, sw, file_suffix="ALL"):
     linewidth = 2
     print("Number of windows = {len(window_points)}")
-    out_fn = f"./example_outputs/CC_{'GOOD' if keep_good_points else 'BAD'}_{filename_for_demo.split('.mp4')[0]}_out_{file_suffix}.mp4"
+    out_fn = f"./CC_EPIC_{'GOOD' if keep_good_points else 'BAD'}_{filename_for_demo.split('.mp4')[0]}_out_{file_suffix}.mp4"
     video_writer = cv2.VideoWriter(out_fn, cv2.VideoWriter_fourcc(*'MP4V'), 12.0, (2688,512))
     for window_idx, frame_points in  enumerate(window_points):
         print(f"Annotating window: {window_idx+1}")
@@ -212,7 +215,8 @@ def main(
         shuffle=False, # dataset shuffling
         log_freq=1, # how often to make image summaries
         log_dir='./logs_demo',
-        init_dir='/home/deepthought/Ahmad/pips2/reference_model',
+        #init_dir='/home/deepthought/Ahmad/pips2/reference_model',
+        init_dir='/home/deepthought/Ahmad/pips2/reference_model_epic',
         device_ids=[0],
 ):
 
